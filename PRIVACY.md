@@ -15,7 +15,14 @@ Watch Notes has two parts: an Apple Watch app and a Claude Code plugin that runs
 
 - It downloads your encrypted notes from the relay, decrypts them, and saves them in `~/.claude-watch-notes/` on your Mac.
 - It passes each note to your Claude Code session. Claude Code then processes it under your Anthropic account, like anything you type into Claude Code. See [Anthropic's privacy policy](https://www.anthropic.com/legal/privacy).
+- When Claude finishes a note, it records a short summary with the plugin's `watch_note_done` tool. The summary is saved in the same place, on your Mac only, and is never sent to the relay or anywhere else.
 - Nothing is sent back to the watch.
+
+## How long data is kept
+
+- **On your Mac:** notes and Claude's summaries stay in `~/.claude-watch-notes/` until you delete them.
+- **On the relay (ntfy.sh):** encrypted messages for up to about 12 hours, and file attachments (notes of 4 KB or more) for about 3 hours.
+- **By the developer:** nothing, because no data ever reaches the developer.
 
 ## What we collect
 
