@@ -1,0 +1,38 @@
+{
+  "name": "watch-notes",
+  "displayName": "Watch Notes",
+  "version": "1.0.0",
+  "description": "Jot ideas on your Apple Watch and Claude Code works on them while you're away. Notes are end-to-end encrypted; nothing is sent back to the watch.",
+  "author": {
+    "name": "Max Buda",
+    "url": "https://github.com/maxvbuda"
+  },
+  "homepage": "https://github.com/maxvbuda/claude-watch-notes-mcp",
+  "repository": "https://github.com/maxvbuda/claude-watch-notes-mcp",
+  "documentationUrl": "https://github.com/maxvbuda/claude-watch-notes-mcp#readme",
+  "supportUrl": "https://github.com/maxvbuda/claude-watch-notes-mcp/issues",
+  "privacyPolicyUrl": "https://github.com/maxvbuda/claude-watch-notes-mcp/blob/main/PRIVACY.md",
+  "license": "MIT",
+  "keywords": [
+    "apple-watch",
+    "watchos",
+    "notes",
+    "channel",
+    "mcp",
+    "ntfy"
+  ],
+  "mcpServers": {
+    "watch-notes": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/server/watch-notes.mjs"
+      ]
+    }
+  },
+  "channels": [
+    {
+      "server": "watch-notes",
+      "displayName": "Watch Notes"
+    }
+  ]
+}

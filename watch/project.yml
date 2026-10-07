@@ -1,0 +1,65 @@
+name: ClaudeNotes
+options:
+  bundleIdPrefix: dev.maxbuda
+  deploymentTarget:
+    watchOS: "26.0"   # Apple Watch SE 3 ships with watchOS 26: no back-deploy shims
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Size/speed for SE 3 (S10, 40/44mm)
+    SWIFT_OPTIMIZATION_LEVEL: -Osize
+    SWIFT_COMPILATION_MODE: wholemodule
+    GCC_OPTIMIZATION_LEVEL: s
+    DEAD_CODE_STRIPPING: YES
+    STRIP_INSTALLED_PRODUCT: YES
+    STRIP_SWIFT_SYMBOLS: YES
+    DEBUG_INFORMATION_FORMAT: dwarf
+    ASSETCATALOG_COMPILER_OPTIMIZATION: space
+    LOCALIZATION_PREFERS_STRING_CATALOGS: NO
+    ENABLE_PREVIEWS: NO
+targets:
+  ClaudeNotes:
+    type: application
+    platform: watchOS
+    sources: [ClaudeNotes]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.maxbuda.ClaudeNotes
+        TARGETED_DEVICE_FAMILY: "4"
+        GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_CFBundleDisplayName: Ideas
+        INFOPLIST_KEY_WKWatchOnly: YES
+        INFOPLIST_KEY_WKApplication: YES
+        CODE_SIGN_STYLE: Automatic
+        # DEVELOPMENT_TEAM: XXXXXXXXXX  # set yours, or pick it in Xcode > Signing
+      configs:
+        Debug:
+          INFOPLIST_FILE: Support/Debug-Info.plist
+  ClaudeNotesTests:
+    type: bundle.unit-test
+    platform: watchOS
+    sources: [ClaudeNotesTests]
+    dependencies: [{ target: ClaudeNotes }]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_OPTIMIZATION_LEVEL: -Onone
+  ClaudeNotesUITests:
+    type: bundle.ui-testing
+    platform: watchOS
+    sources: [ClaudeNotesUITests]
+    dependencies: [{ target: ClaudeNotes }]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: ClaudeNotes
+schemes:
+  ClaudeNotes:
+    build:
+      targets: { ClaudeNotes: all }
+    test:
+      config: Debug
+      targets: [ClaudeNotesTests, ClaudeNotesUITests]
