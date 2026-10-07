@@ -3,9 +3,10 @@
 // Receives end-to-end encrypted ideas jotted on Apple Watch (relayed via ntfy)
 // and pushes them into the running Claude Code session. Nothing is sent back.
 //
-//   watch-notes pair     # show a code; type it on the watch to pair
-//   watch-notes start    # open a Claude Code session that receives your ideas
-//   (no arguments, stdin not a terminal) # MCP server: Claude Code spawns this
+//   node watch-notes.mjs         # MCP server (Claude Code spawns this)
+//   node watch-notes.mjs pair    # show a code; type it on the watch to pair
+//
+// This file never launches other programs. The `watch-notes` terminal command (cli/) does that.
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -67,34 +68,6 @@ async function* lines(body, kick) {
   }
 }
 
-// ---------- start / help ----------
-// How Claude Code is told to listen to this plugin's channel. Custom channels need the development
-// flag until the plugin is on Anthropic's approved list; then this becomes ['--channels', ...].
-const CHANNEL_ARGS = ['--dangerously-load-development-channels', 'plugin:watch-notes@watch-notes']
-
-if (process.argv[2] === 'start') {
-  const { spawn } = await import('node:child_process')
-  const claudeArgs = ['--permission-mode', 'auto', ...CHANNEL_ARGS, ...process.argv.slice(3)]
-  // caffeinate keeps the Mac awake (so Claude can keep working) for as long as the session runs.
-  const [cmd, args] = process.platform === 'darwin' ? ['caffeinate', ['-i', 'claude', ...claudeArgs]] : ['claude', claudeArgs]
-  console.log('Starting Claude Code with Watch Notes. Ideas from your watch will show up here.\n' +
-    'Claude Code will show a warning about development channels: choose "I am using this for local development".\n')
-  const child = spawn(cmd, args, { stdio: 'inherit' })
-  child.on('error', e => { console.error(e.code === 'ENOENT' ? 'Claude Code is not installed (no `claude` command).' : e.message); process.exit(1) })
-  child.on('exit', code => process.exit(code ?? 0))
-  await new Promise(() => {}) // the child owns the terminal until it exits
-}
-
-if (process.argv[2] === 'help' || process.argv[2] === '--help' || (!process.argv[2] && process.stdin.isTTY)) {
-  console.log(`Watch Notes: jot ideas on your Apple Watch; Claude Code does them while you're away.
-
-  watch-notes pair              Pair your watch (shows a code to type on it)
-  watch-notes start [args...]   Start Claude Code listening for ideas (extra args go to claude,
-                                e.g. --continue to keep your last conversation)
-`)
-  process.exit(0)
-}
-
 // ---------- pair ----------
 // Code -> (pairing key, pairing topic) via HKDF. The watch derives the same pair,
 // posts its freshly generated topic+key sealed with the pairing key, and waits for our ack.
@@ -107,22 +80,6 @@ if (process.argv[2] === 'pair') {
   const pairURL = `${RELAY}/cwp-${derive('topic', 16).toString('hex')}`
 
   console.log(`\n  Pairing code:  ${code.slice(0, 4)}-${code.slice(4)}\n\n  Open the app on your watch and enter it. Waiting up to 10 minutes…\n`)
-  // Typing on a simulated watch is painful: hand the code to any booted watch simulator with the app.
-  if (process.platform === 'darwin' && !process.env.CLAUDE_WATCH_NOTES_NO_SIM) {
-    const { execFileSync } = await import('node:child_process')
-    try {
-      const { devices } = JSON.parse(execFileSync('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'], { stdio: ['ignore', 'pipe', 'ignore'] }))
-      for (const [runtime, list] of Object.entries(devices)) {
-        if (!runtime.includes('watchOS')) continue
-        for (const d of list) {
-          try {
-            execFileSync('xcrun', ['simctl', 'launch', '--terminate-running-process', d.udid, 'dev.maxbuda.ClaudeNotes', '-pairCode', code], { stdio: 'ignore' })
-            console.log(`  Sent the code to simulator "${d.name}".\n`)
-          } catch {} // app not installed on this simulator
-        }
-      }
-    } catch {} // no Xcode
-  }
   try {
     // The pairing topic is derived from a fresh random code, so everything on it is from this attempt.
     const timeout = AbortSignal.timeout(Number(process.env.CLAUDE_WATCH_NOTES_PAIR_TIMEOUT_MS) || 600_000)

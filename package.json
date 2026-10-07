@@ -3,9 +3,18 @@
   "version": "1.0.0",
   "description": "Jot ideas on your Apple Watch; Claude Code works on them while you're away.",
   "type": "module",
-  "bin": { "watch-notes": "plugin/server/watch-notes.mjs" },
-  "files": ["plugin/server/"],
-  "engines": { "node": ">=20" },
-  "scripts": { "test": "node --test test/server.test.mjs" },
+  "bin": {
+    "watch-notes": "cli/watch-notes.mjs"
+  },
+  "files": [
+    "cli/",
+    "plugin/server/"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/server.test.mjs"
+  },
   "license": "MIT"
 }
