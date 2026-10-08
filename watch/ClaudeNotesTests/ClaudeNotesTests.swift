@@ -200,6 +200,20 @@ final class ClaudeNotesTests: XCTestCase {
         XCTAssertEqual(online.notes.first?.text, "e2e trim \(Store.keep + 3)")
     }
 
+    func testDeleteAllHistoryKeepsUnsentNotes() async throws {
+        let store = freshStore()
+        store.setPairing(try XCTUnwrap(Self.pairing))
+        store.draft = ["e2e history 1"]
+        store.send()
+        try await wait("delivered") { store.pending == 0 }
+        store.setPairing(nil) // nothing can send now
+        store.draft = ["unsent keep"]
+        store.send()
+        store.clearHistory()
+        XCTAssertEqual(store.notes.map(\.text), ["unsent keep"])
+        XCTAssertEqual(Store(defaults: store.defaults).notes.map(\.text), ["unsent keep"]) // persisted
+    }
+
     func testEmptyDraftSendsNothing() {
         let store = freshStore()
         store.draft = []

@@ -35,6 +35,16 @@ final class ClaudeNotesUITests: XCTestCase {
         XCTAssertTrue(toggle.waitForExistence(timeout: 5), "no Suggestions switch in Settings")
         XCTAssertEqual(toggle.value as? String, "1")
 
+        // Delete All History asks first, then clears the Handed off list.
+        let clear = app.buttons["Delete All History"]
+        XCTAssertTrue(clear.isEnabled)
+        clear.tap()
+        let delete = app.buttons["Delete"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 3), "no confirmation dialog")
+        delete.tap()
+        XCTAssertTrue(app.buttons["Delete All History"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Delete All History"].isEnabled, "history should be empty")
+
         // Unpair asks for confirmation, then returns to the Pair screen.
         let unpair = app.buttons["Unpair"]
         for _ in 0..<6 where !unpair.isHittable { app.swipeUp() }

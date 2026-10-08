@@ -87,6 +87,7 @@ try {
   once('e2e long ' + 'lorem ipsum '.repeat(450))
   for (let i = 1; i <= 15; i++) once(`e2e trim ${i}`)
   once('e2e accepted suggestion')
+  once('e2e history 1')
   assert.equal(pushes.filter(p => p.startsWith('unsent')).length, 0)
   console.log(`  ✔ MCP server received all ${pushes.length} notes exactly once, in order\n`)
   }

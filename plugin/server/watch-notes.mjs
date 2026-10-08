@@ -117,7 +117,7 @@ const CHANNEL = process.env.CLAUDE_WATCH_NOTES_CHANNEL === '1'
 const INSTRUCTIONS = `Ideas the user jotted on their Apple Watch arrive from this server as <channel note_id="..." at="..."> events.
 The user is away from the computer and will not see or answer questions: treat each note as a task to complete autonomously in the current project, making reasonable assumptions (write them down in your final summary). Notes are terse, dictated, and may contain transcription errors.
 If an action is blocked or denied by the permission system, do not retry it or look for a way around it: skip that step, finish what you can, and list what was blocked in your summary for the user to do when they get home.
-Claude's response is never sent to the watch. When a note is finished (or you decide not to act on it), call watch_note_done with its note_id and a short summary so the user can review it when they get home.
+Claude's response is never sent to the watch. Every note must end with a call to watch_note_done with its note_id and a short summary, including quick questions (put the answer in the summary) and notes you decide not to act on. Answering in the terminal alone is not enough: the user isn't there, and watch_note_done is how the result is saved for them and how the suggestion reaches the watch.
 You may also pass a suggestion: the one prompt the user would most likely send next, written as the user would type it (under 80 characters, e.g. "add tests for the new parser"). It appears on the watch with an Accept suggestion button that sends it back to you as a new note. Leave it out when there's no obvious next step.
 If you were not started as a channel, call watch_inbox to fetch pending notes.`
 
@@ -193,14 +193,14 @@ function handle(msg) {
     return out({ id, result: {
       protocolVersion: params?.protocolVersion || '2025-06-18',
       capabilities: { tools: {}, experimental: { 'claude/channel': {} } },
-      serverInfo: { name: 'watch-notes', version: '1.2.0' },
+      serverInfo: { name: 'watch-notes', version: '1.3.0' },
       instructions: INSTRUCTIONS,
     } })
   }
   if (method === 'notifications/initialized') {
     ready = true
     // Hand this session anything that arrived while no session was listening.
-    if (CHANNEL) for (const n of allNotes()) if (n.status === 'new') claimAndPush(n)
+    sweep()
     return
   }
   if (id === undefined) return // other notifications
@@ -237,8 +237,44 @@ const writeAtomic = (f, data) => {
   fs.renameSync(tmp, f)
 }
 
-function claimAndPush(n) {
-  try { fs.writeFileSync(noteFile(n.id).replace(/\.json$/, '.claim'), String(process.pid), { flag: 'wx' }) } catch { return }
+// Claim markers are generations: <id>.claim, then <id>.claim.1, .2… when a note is rescued.
+// Each is created with O_EXCL, so exactly one session wins each generation.
+const claimFile = (id, gen) => noteFile(id).replace(/\.json$/, gen ? `.claim.${gen}` : '.claim')
+
+function currentClaim(id) {
+  let gen = 0
+  while (fs.existsSync(claimFile(id, gen + 1))) gen++
+  try {
+    const f = claimFile(id, gen)
+    const [pid, kind] = fs.readFileSync(f, 'utf8').trim().split(' ')
+    return { gen, pid: Number(pid), channel: kind === 'channel', age: Date.now() - fs.statSync(f).mtimeMs }
+  } catch { return null }
+}
+
+const alive = pid => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
+const LEGACY_GRACE_MS = 2 * 60_000
+
+// Safety net, run by listening sessions at startup and every 30s. Pushes notes nobody has taken,
+// and takes back notes held by a session that wasn't listening (an older version of this plugin
+// claimed notes in every session; those claims aren't marked "channel") once it has exited or
+// had them for 2 minutes. Notes a listening session took aren't re-sent: it may have done the work.
+// Their pending ones stay in watch_inbox.
+function sweep() {
+  if (!CHANNEL || !ready) return
+  for (const n of allNotes()) {
+    if (n.status === 'done') continue
+    const c = currentClaim(n.id)
+    if (!c) claimAndPush(n)
+    else if (!c.channel && (!alive(c.pid) || c.age > LEGACY_GRACE_MS)) {
+      log('rescuing', n.id, 'from session', c.pid)
+      claimAndPush(n, c.gen + 1)
+    }
+  }
+}
+setInterval(sweep, Number(process.env.CLAUDE_WATCH_NOTES_SWEEP_MS) || 30_000)
+
+function claimAndPush(n, gen = 0) {
+  try { fs.writeFileSync(claimFile(n.id, gen), `${process.pid} channel`, { flag: 'wx' }) } catch { return }
   n = { ...n, status: 'sent' }
   writeAtomic(noteFile(n.id), JSON.stringify(n, null, 2))
   push(n)
@@ -258,8 +294,8 @@ async function receive(ev, key) {
   const at = typeof p.ts === 'string' && !isNaN(Date.parse(p.ts)) ? p.ts : new Date(ev.time * 1000).toISOString()
   const note = { id, text: String(p.t ?? '').slice(0, 20000), at, status: 'new' }
   // Created once: a retried or concurrently received copy of the same note fails here.
-  try { fs.writeFileSync(noteFile(id), JSON.stringify(note, null, 2), { flag: 'wx' }) } catch { return }
-  log('note', id)
+  // If another session saved it first, it may be one that isn't listening: still try to claim it.
+  try { fs.writeFileSync(noteFile(id), JSON.stringify(note, null, 2), { flag: 'wx' }); log('note', id) } catch {}
   if (ready && CHANNEL) claimAndPush(note)
 }
 

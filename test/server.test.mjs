@@ -274,6 +274,49 @@ describe('sessions, restarts and the network', () => {
     await Promise.all([other.stop(), listening.stop()])
   })
 
+  test('the listening session gets a note even when another session saves it to disk first', async () => {
+    const dir = tmpDir(); const cfg = pairDir(dir)
+    const others = [1, 2, 3].map(() => startServer(dir, { env: { CLAUDE_WATCH_NOTES_CHANNEL: '' } }))
+    const listening = startServer(dir)
+    await Promise.all([...others, listening].map(x => x.ready)); await connected(cfg.topic, 4)
+    const ns = Array.from({ length: 10 }, (_, i) => note(`race ${i}`))
+    for (const n of ns) await post(cfg.topicURL, seal(n, cfg.key))
+    for (const n of ns) await listening.waitFor(pushFor(n.id))
+    assert.equal(listening.pushes().length, 10)
+    await Promise.all([...others, listening].map(x => x.stop()))
+  })
+
+  test('safety net: takes back notes held by non-listening sessions, not by listeners', async () => {
+    const dir = tmpDir(); pairDir(dir)
+    const notes = path.join(dir, 'notes'); fs.mkdirSync(notes, { recursive: true })
+    const held = (text, claim, ageMs = 0) => {
+      const n = { id: crypto.randomUUID().toUpperCase(), text, at: new Date().toISOString(), status: 'sent' }
+      fs.writeFileSync(path.join(notes, `${n.id}.json`), JSON.stringify(n))
+      const f = path.join(notes, `${n.id}.claim`)
+      fs.writeFileSync(f, claim)
+      if (ageMs) { const t = (Date.now() - ageMs) / 1000; fs.utimesSync(f, t, t) }
+      return n
+    }
+    const dead = spawn(process.execPath, ['-e', '']); await new Promise(r => dead.on('exit', r))
+    const exited = held('held by an exited old-version session', String(dead.pid))
+    const exitedListener = held('held by an exited listener', `${dead.pid} channel`)
+    const oldVersion = held('held by an old-version session', String(process.pid), 5 * 60_000)
+    const fresh = held('just taken by an old-version session', String(process.pid))
+    const listener = held('held by a live listener', `${process.pid} channel`)
+    const done = held('already done', `${dead.pid} channel`)
+    fs.writeFileSync(path.join(notes, `${done.id}.json`), JSON.stringify({ ...done, status: 'done' }))
+
+    const s = startServer(dir, { env: { CLAUDE_WATCH_NOTES_SWEEP_MS: '200' } })
+    await s.ready
+    await s.waitFor(pushFor(exited.id)); await s.waitFor(pushFor(oldVersion.id))
+    // Rescued exactly once, even though the sweep keeps running.
+    await sleep(800)
+    for (const n of [exited, oldVersion]) assert.equal(s.pushes().filter(m => m.params.meta.note_id === n.id).length, 1)
+    for (const n of [fresh, listener, exitedListener, done]) assert.equal(s.pushes().filter(m => m.params.meta.note_id === n.id).length, 0, n.text)
+    assert.ok(fs.existsSync(path.join(notes, `${exited.id}.claim.1`)))
+    await s.stop()
+  })
+
   test('notes that arrive before the session is ready are pushed on initialize', async () => {
     const dir = tmpDir(); const cfg = pairDir(dir)
     const s = startServer(dir, { init: false })

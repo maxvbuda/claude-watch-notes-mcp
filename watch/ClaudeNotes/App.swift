@@ -68,7 +68,7 @@ final class Store {
     private(set) var pairing = Keychain.load().flatMap { try? JSONDecoder().decode(Pairing.self, from: $0) }
     private var flushing = false
     private var retry: Task<Void, Never>?
-    private let defaults: UserDefaults
+    let defaults: UserDefaults
     static let keep = 12
     static let retryDelay = Duration.seconds(15)
 
@@ -104,6 +104,12 @@ final class Store {
         save()
         WKInterfaceDevice.current().play(.success)
         Task { await flush() }
+    }
+
+    /// Settings → Delete All History. Notes still waiting to send are kept, so no idea is lost.
+    func clearHistory() {
+        notes.removeAll(where: \.sent)
+        save()
     }
 
     /// Picks up the newest suggestion the Mac posted to "<topic>-s" since we last looked.
@@ -406,6 +412,7 @@ struct SettingsView: View {
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var confirmUnpair = false
+    @State private var confirmClear = false
 
     var body: some View {
         @Bindable var store = store
@@ -416,9 +423,16 @@ struct SettingsView: View {
                 } footer: {
                     Text("Show Claude's suggested next step when it finishes a note.")
                 }
+                Button("Delete All History", role: .destructive) { confirmClear = true }
+                    .disabled(!store.notes.contains(where: \.sent))
                 Button("Unpair", role: .destructive) { confirmUnpair = true }
             }
             .navigationTitle("Settings")
+            .confirmationDialog("Delete all history?", isPresented: $confirmClear) {
+                Button("Delete", role: .destructive) { store.clearHistory() }
+            } message: {
+                Text("Clears the Handed off list on this watch. Notes still waiting to send are kept.")
+            }
             .confirmationDialog("Unpair from your Mac?", isPresented: $confirmUnpair) {
                 Button("Unpair", role: .destructive) {
                     dismiss()
