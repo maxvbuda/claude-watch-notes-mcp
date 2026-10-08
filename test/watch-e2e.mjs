@@ -22,7 +22,7 @@ const code = () => Array.from({ length: 8 }, () => 'ABCDEFGHJKMNPQRSTUVWXYZ23456
 const mock = await startMock({ port: 8799 })
 const relay = REAL ? 'https://ntfy.sh' : mock.url
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cwn-e2e-'))
-const env = { ...process.env, CLAUDE_WATCH_NOTES_DIR: dir, CLAUDE_WATCH_NOTES_RELAY: relay, CLAUDE_WATCH_NOTES_NO_SIM: '1' }
+const env = { ...process.env, CLAUDE_WATCH_NOTES_DIR: dir, CLAUDE_WATCH_NOTES_RELAY: relay, CLAUDE_WATCH_NOTES_NO_SIM: '1', CLAUDE_WATCH_NOTES_CHANNEL: '1' }
 
 // The MCP server, as Claude Code would run it.
 const server = spawn(process.execPath, [SERVER], { env, stdio: ['pipe', 'pipe', 'inherit'] })

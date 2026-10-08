@@ -109,6 +109,10 @@ fs.mkdirSync(NOTES, { recursive: true, mode: 0o700 })
 const out = msg => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...msg }) + '\n')
 const log = (...a) => process.stderr.write(`[watch-notes] ${a.join(' ')}\n`)
 let ready = false
+// Every Claude Code session with the plugin runs this server, but only the one `watch-notes start`
+// opened is listening on the channel (it sets this). Others must not claim notes they'd ignore;
+// they can still work through them with watch_inbox.
+const CHANNEL = process.env.CLAUDE_WATCH_NOTES_CHANNEL === '1'
 
 const INSTRUCTIONS = `Ideas the user jotted on their Apple Watch arrive from this server as <channel note_id="..." at="..."> events.
 The user is away from the computer and will not see or answer questions: treat each note as a task to complete autonomously in the current project, making reasonable assumptions (write them down in your final summary). Notes are terse, dictated, and may contain transcription errors.
@@ -189,14 +193,14 @@ function handle(msg) {
     return out({ id, result: {
       protocolVersion: params?.protocolVersion || '2025-06-18',
       capabilities: { tools: {}, experimental: { 'claude/channel': {} } },
-      serverInfo: { name: 'watch-notes', version: '1.1.0' },
+      serverInfo: { name: 'watch-notes', version: '1.2.0' },
       instructions: INSTRUCTIONS,
     } })
   }
   if (method === 'notifications/initialized') {
     ready = true
     // Hand this session anything that arrived while no session was listening.
-    for (const n of allNotes()) if (n.status === 'new') claimAndPush(n)
+    if (CHANNEL) for (const n of allNotes()) if (n.status === 'new') claimAndPush(n)
     return
   }
   if (id === undefined) return // other notifications
@@ -256,7 +260,7 @@ async function receive(ev, key) {
   // Created once: a retried or concurrently received copy of the same note fails here.
   try { fs.writeFileSync(noteFile(id), JSON.stringify(note, null, 2), { flag: 'wx' }) } catch { return }
   log('note', id)
-  if (ready) claimAndPush(note)
+  if (ready && CHANNEL) claimAndPush(note)
 }
 
 // ---------- ntfy subscription (auto-reconnect, reloads when re-paired) ----------

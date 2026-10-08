@@ -56,6 +56,14 @@ struct Suggestion: Codable, Equatable {
 final class Store {
     var draft: [String] { didSet { save() } }
     private(set) var notes: [Note]
+    /// Settings → Suggestions. Off: no polling, nothing shown; back on: only suggestions from then on.
+    var suggestionsOn: Bool {
+        didSet {
+            defaults.set(suggestionsOn, forKey: "suggestionsOn")
+            if suggestionsOn { defaults.set(String(Int(Date.now.timeIntervalSince1970)), forKey: "suggestionSince") }
+            else { suggestion = nil }
+        }
+    }
     var suggestion: Suggestion? { didSet { defaults.set(try? JSONEncoder().encode(suggestion), forKey: "suggestion") } }
     private(set) var pairing = Keychain.load().flatMap { try? JSONDecoder().decode(Pairing.self, from: $0) }
     private var flushing = false
@@ -68,6 +76,7 @@ final class Store {
         self.defaults = defaults
         draft = defaults.stringArray(forKey: "draft") ?? []
         notes = (defaults.data(forKey: "notes")).flatMap { try? JSONDecoder().decode([Note].self, from: $0) } ?? []
+        suggestionsOn = defaults.object(forKey: "suggestionsOn") as? Bool ?? true
         suggestion = (defaults.data(forKey: "suggestion")).flatMap { try? JSONDecoder().decode(Suggestion.self, from: $0) }
         #if targetEnvironment(simulator)
         if defaults.bool(forKey: "resetPairing") { setPairing(nil) } // UI tests start unpaired
@@ -99,11 +108,11 @@ final class Store {
 
     /// Picks up the newest suggestion the Mac posted to "<topic>-s" since we last looked.
     func checkSuggestion() async {
-        guard let pairing else { return }
+        guard suggestionsOn, let pairing else { return }
         let since = defaults.string(forKey: "suggestionSince") ?? "12h"
         let url = URL(string: "\(pairing.topicURL.absoluteString)-s/json?poll=1&since=\(since)")!
         guard let (data, _) = try? await URLSession.shared.data(from: url),
-              self.pairing?.topicURL == pairing.topicURL else { return } // unpaired meanwhile
+              suggestionsOn, self.pairing?.topicURL == pairing.topicURL else { return } // changed meanwhile
         let key = SymmetricKey(data: pairing.key)
         for line in data.split(separator: UInt8(ascii: "\n")) {
             guard let ev = try? JSONDecoder().decode(Ntfy.Event.self, from: line),
@@ -317,7 +326,7 @@ struct PairView: View {
 struct EditorView: View {
     @Environment(Store.self) private var store
     @State private var line = ""
-    @State private var confirmUnpair = false
+    @State private var showSettings = false
     private let accent = Color(red: 0.85, green: 0.47, blue: 0.34)
 
     var body: some View {
@@ -358,7 +367,7 @@ struct EditorView: View {
                 }
             }
 
-            Button("Unpair", role: .destructive) { confirmUnpair = true }
+            Button { showSettings = true } label: { Label("Settings", systemImage: "gearshape") }
                 .font(.footnote)
                 .listRowBackground(Color.clear)
         }
@@ -382,11 +391,7 @@ struct EditorView: View {
                 }
             }
         }
-        .confirmationDialog("Unpair from your Mac?", isPresented: $confirmUnpair) {
-            Button("Unpair", role: .destructive) { store.setPairing(nil) }
-        } message: {
-            Text("You'll need to run pair on your Mac again.")
-        }
+        .sheet(isPresented: $showSettings) { SettingsView() }
     }
 
     private func commitLine() {
@@ -396,3 +401,32 @@ struct EditorView: View {
     }
 }
 
+
+struct SettingsView: View {
+    @Environment(Store.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    @State private var confirmUnpair = false
+
+    var body: some View {
+        @Bindable var store = store
+        NavigationStack {
+            List {
+                Section {
+                    Toggle("Suggestions", isOn: $store.suggestionsOn)
+                } footer: {
+                    Text("Show Claude's suggested next step when it finishes a note.")
+                }
+                Button("Unpair", role: .destructive) { confirmUnpair = true }
+            }
+            .navigationTitle("Settings")
+            .confirmationDialog("Unpair from your Mac?", isPresented: $confirmUnpair) {
+                Button("Unpair", role: .destructive) {
+                    dismiss()
+                    store.setPairing(nil)
+                }
+            } message: {
+                Text("You'll need to run pair on your Mac again.")
+            }
+        }
+    }
+}

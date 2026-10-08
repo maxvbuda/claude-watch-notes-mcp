@@ -31,8 +31,10 @@ if (cmd === 'start') {
   console.log('Starting Claude Code with Watch Notes. Ideas from your watch will show up here.\n' +
     'Claude Code will warn about development channels: choose "I am using this for local development".\n')
   // caffeinate keeps the Mac awake (so Claude can keep working) for as long as the session runs.
-  if (process.platform === 'darwin') run('caffeinate', ['-i', 'claude', ...claudeArgs], { stdio: 'inherit' })
-  else run('claude', claudeArgs, { stdio: 'inherit' })
+  // Tells this session's plugin server that it's listening, so it (not other open sessions) takes the notes.
+  const opts = { stdio: 'inherit', env: { ...process.env, CLAUDE_WATCH_NOTES_CHANNEL: '1' } }
+  if (process.platform === 'darwin') run('caffeinate', ['-i', 'claude', ...claudeArgs], opts)
+  else run('claude', claudeArgs, opts)
 } else if (cmd === 'pair') {
   const child = run(process.execPath, [SERVER, 'pair'], { stdio: ['inherit', 'pipe', 'inherit'] })
   let sent = false

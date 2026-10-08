@@ -27,6 +27,14 @@ final class ClaudeNotesUITests: XCTestCase {
         XCTAssertTrue(app.images["Delivered"].waitForExistence(timeout: 15), "note never showed as delivered")
         XCTAssertFalse(app.buttons["Send to Claude"].exists, "draft should be cleared after sending")
 
+        // Settings: the Suggestions switch is there and on by default.
+        let settings = app.buttons["Settings"]
+        for _ in 0..<6 where !settings.isHittable { app.swipeUp() }
+        settings.tap()
+        let toggle = app.switches["Suggestions"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "no Suggestions switch in Settings")
+        XCTAssertEqual(toggle.value as? String, "1")
+
         // Unpair asks for confirmation, then returns to the Pair screen.
         let unpair = app.buttons["Unpair"]
         for _ in 0..<6 where !unpair.isHittable { app.swipeUp() }

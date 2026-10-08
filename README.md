@@ -23,7 +23,7 @@ Watch (dictate/scribble) ──AES-GCM──▶ ntfy topic ──▶ watch-notes
 
 **3. Install the watch app**: from the App Store, or build it yourself: `cd watch && xcodegen generate && open ClaudeNotes.xcodeproj`, pick your team, then Run.
 
-**4. Pair (once):** run `watch-notes pair`, or `/watch-notes:pair` inside Claude Code. It shows a code like `K7QX-M2PA`; type it into the app on the watch. The watch generates its own topic and key, sends them sealed with a key derived from the code, and waits for the Mac's acknowledgement. Nothing secret is built into the app, so one build works for anyone. Running Claude Code sessions pick up a new pairing automatically. Tap **Unpair** at the bottom of the list to pair again.
+**4. Pair (once):** run `watch-notes pair`, or `/watch-notes:pair` inside Claude Code. It shows a code like `K7QX-M2PA`; type it into the app on the watch. The watch generates its own topic and key, sends them sealed with a key derived from the code, and waits for the Mac's acknowledgement. Nothing secret is built into the app, so one build works for anyone. Running Claude Code sessions pick up a new pairing automatically. To pair again, tap **Settings** at the bottom of the list, then **Unpair**.
 
 ## Use
 
@@ -35,7 +35,7 @@ Before you leave, start a session in the project you want Claude to work on. The
 watch-notes start             # add --continue to pick up your last conversation
 ```
 
-Ideas arrive in the session within seconds. `watch-notes start` runs `claude --permission-mode auto` with this plugin's channel turned on, and keeps your Mac awake while the session runs. Until Watch Notes is on Anthropic's approved channel list, Claude Code shows a warning about development channels first: choose **I am using this for local development**.
+Ideas arrive in the session within seconds. Only sessions opened with `watch-notes start` take notes, so other Claude Code windows you have open won't grab them. `watch-notes start` runs `claude --permission-mode auto` with this plugin's channel turned on, and keeps your Mac awake while the session runs. Until Watch Notes is on Anthropic's approved channel list, Claude Code shows a warning about development channels first: choose **I am using this for local development**.
 
 **Every few minutes (no warning):** in a normal `claude --permission-mode auto` session, run
 
@@ -47,7 +47,7 @@ Ideas arrive in the session within seconds. `watch-notes start` runs `claude --p
 
 On the watch, tap **Jot an idea…** and add as many lines as you like. Swipe a line to delete it, then tap the orange send button in the corner. A ✓ means the note was delivered.
 
-When Claude finishes a note it can suggest a next step, like Claude Code's prompt suggestions. The suggestion shows at the top of the watch app. Tap **Accept suggestion** to send it to Claude as a new note, or swipe it away.
+When Claude finishes a note it can suggest a next step, like Claude Code's prompt suggestions. The suggestion shows at the top of the watch app. Tap **Accept suggestion** to send it to Claude as a new note, or swipe it away. To turn suggestions off, go to **Settings → Suggestions**.
 
 When you get home, the work is done. Claude calls `watch_note_done` with a summary for each note; the summaries are in `~/.claude-watch-notes/notes/`. Notes that arrive while no session is running are handed to the next session that starts, exactly once even with several sessions open.
 

@@ -94,6 +94,17 @@ final class ClaudeNotesTests: XCTestCase {
         await store.checkSuggestion()
         XCTAssertNil(store.suggestion)
 
+        // Off: nothing is fetched or shown, and turning it back on skips what was sent meanwhile.
+        store.suggestionsOn = false
+        let hidden = try JSONSerialization.data(withJSONObject: ["s": "sent while off"])
+        _ = try await Ntfy.publish(hidden, key: SymmetricKey(data: p.key), to: suggestions)
+        await store.checkSuggestion()
+        XCTAssertNil(store.suggestion)
+        try await Task.sleep(for: .seconds(1.1))
+        store.suggestionsOn = true
+        await store.checkSuggestion()
+        XCTAssertNil(store.suggestion)
+
         let body = try JSONSerialization.data(withJSONObject: ["s": "e2e accepted suggestion"])
         _ = try await Ntfy.publish(body, key: SymmetricKey(data: p.key), to: suggestions)
         await store.checkSuggestion()

@@ -43,7 +43,7 @@ function pairDir(dir, topic = `cw-${crypto.randomBytes(16).toString('hex')}`) {
 /** Spawns the MCP server; collects JSON-RPC output. */
 function startServer(dir, { init = true, env = {} } = {}) {
   const p = spawn(process.execPath, [SERVER], {
-    env: { ...process.env, CLAUDE_WATCH_NOTES_DIR: dir, CLAUDE_WATCH_NOTES_RELAY: mock.url, CLAUDE_WATCH_NOTES_IDLE_MS: '1500', ...env },
+    env: { ...process.env, CLAUDE_WATCH_NOTES_DIR: dir, CLAUDE_WATCH_NOTES_RELAY: mock.url, CLAUDE_WATCH_NOTES_IDLE_MS: '1500', CLAUDE_WATCH_NOTES_CHANNEL: '1', ...env },
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   spawned.add(p)
@@ -259,6 +259,21 @@ describe('delivery', () => {
 })
 
 describe('sessions, restarts and the network', () => {
+  test('only the channel session claims notes; other open sessions leave them alone', async () => {
+    const dir = tmpDir(); const cfg = pairDir(dir)
+    const other = startServer(dir, { env: { CLAUDE_WATCH_NOTES_CHANNEL: '' } }) // e.g. a `claude --resume` window
+    await other.ready; await connected(cfg.topic)
+    const n = note('for the channel session')
+    await post(cfg.topicURL, seal(n, cfg.key))
+    await sleep(800)
+    assert.equal(other.pushes().length, 0)
+    const r = await other.request('tools/call', { name: 'watch_inbox', arguments: {} })
+    assert.match(r.result.content[0].text, new RegExp(n.id)) // still reachable from /watch-notes:inbox
+    const listening = startServer(dir)
+    await listening.waitFor(pushFor(n.id))
+    await Promise.all([other.stop(), listening.stop()])
+  })
+
   test('notes that arrive before the session is ready are pushed on initialize', async () => {
     const dir = tmpDir(); const cfg = pairDir(dir)
     const s = startServer(dir, { init: false })
