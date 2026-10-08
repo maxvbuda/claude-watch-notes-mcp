@@ -1,7 +1,7 @@
 {
   "name": "watch-notes",
   "displayName": "Watch Notes",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Jot ideas on your Apple Watch and Claude Code works on them while you're away. Notes are end-to-end encrypted; only an optional one-line suggestion comes back to the watch.",
   "author": {
     "name": "Max Buda",

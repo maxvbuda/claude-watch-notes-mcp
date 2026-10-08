@@ -189,7 +189,7 @@ function handle(msg) {
     return out({ id, result: {
       protocolVersion: params?.protocolVersion || '2025-06-18',
       capabilities: { tools: {}, experimental: { 'claude/channel': {} } },
-      serverInfo: { name: 'watch-notes', version: '1.0.0' },
+      serverInfo: { name: 'watch-notes', version: '1.1.0' },
       instructions: INSTRUCTIONS,
     } })
   }
