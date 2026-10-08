@@ -73,6 +73,36 @@ final class ClaudeNotesTests: XCTestCase {
         }
     }
 
+    // MARK: suggestions
+
+    func testSuggestionIsPickedUpAndAcceptedAsANote() async throws {
+        let p = try XCTUnwrap(Self.pairing)
+        let store = freshStore()
+        store.setPairing(p)
+        let suggestions = URL(string: p.topicURL.absoluteString + "-s")!
+        // Junk and wrong-key messages are ignored; the newest valid one wins.
+        _ = try await Ntfy.publish(Data("{}".utf8), key: SymmetricKey(size: .bits256), to: suggestions)
+        for s in ["older idea", "e2e suggestion"] {
+            let body = try JSONSerialization.data(withJSONObject: ["s": s, "note": "x"])
+            _ = try await Ntfy.publish(body, key: SymmetricKey(data: p.key), to: suggestions)
+        }
+        await store.checkSuggestion()
+        XCTAssertEqual(store.suggestion?.text, "e2e suggestion")
+
+        // Already seen: a second check doesn't bring back a dismissed suggestion.
+        store.suggestion = nil
+        await store.checkSuggestion()
+        XCTAssertNil(store.suggestion)
+
+        let body = try JSONSerialization.data(withJSONObject: ["s": "e2e accepted suggestion"])
+        _ = try await Ntfy.publish(body, key: SymmetricKey(data: p.key), to: suggestions)
+        await store.checkSuggestion()
+        store.acceptSuggestion()
+        XCTAssertNil(store.suggestion)
+        XCTAssertEqual(store.notes.first?.text, "e2e accepted suggestion")
+        try await wait("accepted suggestion delivered") { store.pending == 0 }
+    }
+
     // MARK: keychain
 
     func testKeychainRoundTrip() {

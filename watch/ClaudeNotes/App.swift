@@ -4,6 +4,7 @@ import WatchKit
 
 // Jot ideas on your wrist; Claude Code does them while you're away.
 // By design there is no response view: you get a haptic and a checkmark, nothing to read.
+// The one thing that comes back is Claude's suggested next prompt, which you can accept with a tap.
 
 @main
 struct ClaudeNotesApp: App {
@@ -17,7 +18,9 @@ struct ClaudeNotesApp: App {
             }
             .environment(store)
         }
-            .onChange(of: phase) { if phase == .active { Task { await store.flush() } } }
+            .onChange(of: phase) {
+                if phase == .active { Task { await store.flush(); await store.checkSuggestion() } }
+            }
     }
 }
 
@@ -43,10 +46,17 @@ struct Note: Codable, Identifiable {
     var sent = false
 }
 
+/// A next prompt Claude suggested when it finished a note (watch_note_done's `suggestion`).
+struct Suggestion: Codable, Equatable {
+    let id: String // relay message id
+    let text: String
+}
+
 @MainActor @Observable
 final class Store {
     var draft: [String] { didSet { save() } }
     private(set) var notes: [Note]
+    var suggestion: Suggestion? { didSet { defaults.set(try? JSONEncoder().encode(suggestion), forKey: "suggestion") } }
     private(set) var pairing = Keychain.load().flatMap { try? JSONDecoder().decode(Pairing.self, from: $0) }
     private var flushing = false
     private var retry: Task<Void, Never>?
@@ -58,6 +68,7 @@ final class Store {
         self.defaults = defaults
         draft = defaults.stringArray(forKey: "draft") ?? []
         notes = (defaults.data(forKey: "notes")).flatMap { try? JSONDecoder().decode([Note].self, from: $0) } ?? []
+        suggestion = (defaults.data(forKey: "suggestion")).flatMap { try? JSONDecoder().decode(Suggestion.self, from: $0) }
         #if targetEnvironment(simulator)
         if defaults.bool(forKey: "resetPairing") { setPairing(nil) } // UI tests start unpaired
         #endif
@@ -66,16 +77,49 @@ final class Store {
     func send() {
         let text = draft.joined(separator: "\n")
         guard !text.isEmpty else { return }
+        draft = []
+        enqueue(text)
+    }
+
+    /// Sends Claude's suggestion back to it as a new note.
+    func acceptSuggestion() {
+        guard let s = suggestion else { return }
+        suggestion = nil
+        enqueue(s.text)
+    }
+
+    private func enqueue(_ text: String) {
         notes.insert(Note(id: UUID(), text: text, ts: .now), at: 0)
         // Trim history, but never drop a note that hasn't been delivered yet.
         while notes.count > Self.keep, let i = notes.lastIndex(where: \.sent) { notes.remove(at: i) }
-        draft = []
+        save()
         WKInterfaceDevice.current().play(.success)
         Task { await flush() }
     }
 
+    /// Picks up the newest suggestion the Mac posted to "<topic>-s" since we last looked.
+    func checkSuggestion() async {
+        guard let pairing else { return }
+        let since = defaults.string(forKey: "suggestionSince") ?? "12h"
+        let url = URL(string: "\(pairing.topicURL.absoluteString)-s/json?poll=1&since=\(since)")!
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              self.pairing?.topicURL == pairing.topicURL else { return } // unpaired meanwhile
+        let key = SymmetricKey(data: pairing.key)
+        for line in data.split(separator: UInt8(ascii: "\n")) {
+            guard let ev = try? JSONDecoder().decode(Ntfy.Event.self, from: line),
+                  let id = ev.id, let box = ev.message.flatMap({ Data(base64Encoded: $0) }) else { continue }
+            defaults.set(id, forKey: "suggestionSince")
+            guard let plain = try? AES.GCM.open(AES.GCM.SealedBox(combined: box), using: key),
+                  let text = (try? JSONDecoder().decode([String: String].self, from: plain))?["s"],
+                  !text.isEmpty else { continue }
+            suggestion = Suggestion(id: id, text: text)
+        }
+    }
+
     func setPairing(_ p: Pairing?) {
         pairing = p
+        suggestion = nil
+        defaults.removeObject(forKey: "suggestionSince")
         Keychain.save(p.flatMap { try? JSONEncoder().encode($0) })
         if p != nil { WKInterfaceDevice.current().play(.success); Task { await flush() } }
     }
@@ -279,6 +323,17 @@ struct EditorView: View {
     var body: some View {
         @Bindable var store = store
         List {
+            if let s = store.suggestion {
+                Section("Suggestion") {
+                    Text(s.text).font(.footnote)
+                        .swipeActions { Button("Dismiss", role: .destructive) { store.suggestion = nil } }
+                    Button(action: store.acceptSuggestion) {
+                        Label("Accept suggestion", systemImage: "arrow.turn.down.left")
+                    }
+                    .foregroundStyle(accent)
+                }
+            }
+
             Section {
                 ForEach(Array(store.draft.enumerated()), id: \.offset) { _, text in
                     Text(text).font(.footnote)
@@ -308,6 +363,13 @@ struct EditorView: View {
                 .listRowBackground(Color.clear)
         }
         .navigationTitle("Ideas")
+        // Watch for suggestions while the list is on screen (watchOS suspends us otherwise).
+        .task {
+            while !Task.isCancelled {
+                await store.checkSuggestion()
+                try? await Task.sleep(for: .seconds(20))
+            }
+        }
         // In the toolbar so it's always on screen, however long the draft gets.
         .toolbar {
             if !store.draft.isEmpty {

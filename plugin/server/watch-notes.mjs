@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // watch-notes: zero-dependency MCP server + Claude Code channel.
 // Receives end-to-end encrypted ideas jotted on Apple Watch (relayed via ntfy)
-// and pushes them into the running Claude Code session. Nothing is sent back.
+// and pushes them into the running Claude Code session. The only thing sent back is an
+// optional one-line suggested next prompt, encrypted with the same key (never Claude's response).
 //
 //   node watch-notes.mjs         # MCP server (Claude Code spawns this)
 //   node watch-notes.mjs pair    # show a code; type it on the watch to pair
@@ -112,7 +113,8 @@ let ready = false
 const INSTRUCTIONS = `Ideas the user jotted on their Apple Watch arrive from this server as <channel note_id="..." at="..."> events.
 The user is away from the computer and will not see or answer questions: treat each note as a task to complete autonomously in the current project, making reasonable assumptions (write them down in your final summary). Notes are terse, dictated, and may contain transcription errors.
 If an action is blocked or denied by the permission system, do not retry it or look for a way around it: skip that step, finish what you can, and list what was blocked in your summary for the user to do when they get home.
-Nothing is ever sent back to the watch. When a note is finished (or you decide not to act on it), call watch_note_done with its note_id and a short summary so the user can review it when they get home.
+Claude's response is never sent to the watch. When a note is finished (or you decide not to act on it), call watch_note_done with its note_id and a short summary so the user can review it when they get home.
+You may also pass a suggestion: the one prompt the user would most likely send next, written as the user would type it (under 80 characters, e.g. "add tests for the new parser"). It appears on the watch with an Accept suggestion button that sends it back to you as a new note. Leave it out when there's no obvious next step.
 If you were not started as a channel, call watch_inbox to fetch pending notes.`
 
 const TOOLS = [
@@ -126,7 +128,11 @@ const TOOLS = [
     description: 'Mark a watch note as done, with a short summary of what was done (stays on this machine).',
     inputSchema: {
       type: 'object',
-      properties: { note_id: { type: 'string' }, summary: { type: 'string' } },
+      properties: {
+        note_id: { type: 'string' },
+        summary: { type: 'string' },
+        suggestion: { type: 'string', description: 'Optional: the next prompt the user would most likely send, as they would type it (under 80 characters). Shown on the watch with an Accept suggestion button.' },
+      },
       required: ['note_id', 'summary'],
     },
   },
@@ -144,7 +150,17 @@ function push(note) {
   })
 }
 
-function callTool(name, args = {}) {
+// Suggestions go to "<topic>-s", sealed with the pairing key, so the watch can poll them.
+async function sendSuggestion(text, noteId) {
+  const cfg = readConfig()
+  if (!cfg) return false
+  try {
+    const body = seal({ s: text, note: noteId, ts: new Date().toISOString() }, Buffer.from(cfg.key, 'base64'))
+    return (await fetch(`${cfg.topicURL}-s`, { method: 'POST', body, signal: AbortSignal.timeout(20_000) })).ok
+  } catch { return false }
+}
+
+async function callTool(name, args = {}) {
   if (name === 'watch_inbox') {
     const pending = allNotes().filter(n => n.status !== 'done')
     return pending.length
@@ -156,8 +172,13 @@ function callTool(name, args = {}) {
     let n
     try { n = JSON.parse(fs.readFileSync(f, 'utf8')) } catch { throw new Error(`No watch note with id ${args.note_id}`) }
     Object.assign(n, { status: 'done', summary: args.summary, doneAt: new Date().toISOString() })
+    const suggestion = typeof args.suggestion === 'string' ? args.suggestion.trim().slice(0, 200) : ''
+    if (suggestion) n.suggestion = suggestion
     writeAtomic(f, JSON.stringify(n, null, 2))
-    return `Marked ${n.id} done.`
+    if (!suggestion) return `Marked ${n.id} done.`
+    return await sendSuggestion(suggestion, n.id)
+      ? `Marked ${n.id} done. Suggestion sent to the watch.`
+      : `Marked ${n.id} done. The suggestion couldn't be sent to the watch (relay unreachable).`
   }
   throw new Error(`unknown tool: ${name}`)
 }
@@ -182,11 +203,9 @@ function handle(msg) {
   if (method === 'ping') return out({ id, result: {} })
   if (method === 'tools/list') return out({ id, result: { tools: TOOLS } })
   if (method === 'tools/call') {
-    try {
-      return out({ id, result: { content: [{ type: 'text', text: callTool(params.name, params.arguments) }] } })
-    } catch (e) {
-      return out({ id, result: { content: [{ type: 'text', text: String(e.message || e) }], isError: true } })
-    }
+    return callTool(params.name, params.arguments).then(
+      text => out({ id, result: { content: [{ type: 'text', text }] } }),
+      e => out({ id, result: { content: [{ type: 'text', text: String(e.message || e) }], isError: true } }))
   }
   out({ id, error: { code: -32601, message: `Method not found: ${method}` } })
 }

@@ -1,6 +1,6 @@
 # Watch Notes for Claude Code
 
-Jot ideas on your Apple Watch. Claude Code works on them while you're away. **The watch never shows Claude's response**, so there's nothing to get pulled into. It's a scratchpad that hands off and goes quiet.
+Jot ideas on your Apple Watch. Claude Code works on them while you're away. **The watch never shows Claude's response**, so there's nothing to get pulled into. It's a scratchpad that hands off and goes quiet. The only thing that comes back is Claude's one-line suggestion for what to do next, which you can send with **Accept suggestion**.
 
 ```
 Watch (dictate/scribble) ──AES-GCM──▶ ntfy topic ──▶ watch-notes plugin ──channel──▶ Claude Code session
@@ -47,6 +47,8 @@ Ideas arrive in the session within seconds. `watch-notes start` runs `claude --p
 
 On the watch, tap **Jot an idea…** and add as many lines as you like. Swipe a line to delete it, then tap the orange send button in the corner. A ✓ means the note was delivered.
 
+When Claude finishes a note it can suggest a next step, like Claude Code's prompt suggestions. The suggestion shows at the top of the watch app. Tap **Accept suggestion** to send it to Claude as a new note, or swipe it away.
+
 When you get home, the work is done. Claude calls `watch_note_done` with a summary for each note; the summaries are in `~/.claude-watch-notes/notes/`. Notes that arrive while no session is running are handed to the next session that starts, exactly once even with several sessions open.
 
 ## Notes
@@ -57,7 +59,7 @@ When you get home, the work is done. Claude calls `watch_note_done` with a summa
 ## Tests
 
 ```sh
-node --test test/server.test.mjs     # server: 39 tests against a mock relay (protocol, crypto, dedupe,
+node --test test/server.test.mjs     # server: 40 tests against a mock relay (protocol, crypto, dedupe,
                                      #   multi-session races, reconnects, stalls, re-pairing, pair command)
 node test/watch-e2e.mjs              # watch app in the SE 3 simulator + real pair/MCP server, via mock relay
 node test/watch-e2e.mjs --real-relay # same UI flow through the public ntfy.sh

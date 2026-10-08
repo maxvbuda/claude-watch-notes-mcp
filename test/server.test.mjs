@@ -234,6 +234,21 @@ describe('delivery', () => {
     assert.equal(saved.status, 'done'); assert.equal(saved.summary, 'did it'); assert.ok(saved.doneAt)
   })
 
+  test('watch_note_done sends an encrypted suggestion to <topic>-s', async () => {
+    const n = note('suggest me')
+    await post(cfg.topicURL, seal(n, cfg.key))
+    await s.waitFor(pushFor(n.id))
+    const r = await s.request('tools/call', { name: 'watch_note_done', arguments: { note_id: n.id, summary: 'ok', suggestion: '  add tests for it  ' } })
+    assert.match(r.result.content[0].text, /Suggestion sent/)
+    const evs = await (await fetch(`${cfg.topicURL}-s/json?poll=1&since=all`)).text()
+    const [ev] = evs.trim().split('\n').map(l => JSON.parse(l))
+    assert.doesNotMatch(ev.message, /add tests/) // relay only sees ciphertext
+    const got = openBox(ev.message, cfg.key)
+    assert.equal(got.s, 'add tests for it'); assert.equal(got.note, n.id)
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'notes', `${n.id}.json`), 'utf8'))
+    assert.equal(saved.suggestion, 'add tests for it')
+  })
+
   test('a burst of 30 notes all arrive, in order', async () => {
     const ns = Array.from({ length: 30 }, (_, i) => note(`burst ${i}`))
     for (const n of ns) await post(cfg.topicURL, seal(n, cfg.key))

@@ -23,10 +23,10 @@ So there's no form to fill in. The route is to make Watch Notes easy to say yes 
 | Sender gating (docs: "An ungated channel is a prompt injection vector") | Only messages sealed with the paired watch's AES-256-GCM key are accepted. Everything else is dropped silently, and tests cover plaintext, wrong-key, truncated, junk, and replayed messages |
 | Pairing flow | One-time 8-character code (HKDF → pairing key and topic). Wrong codes fail closed |
 | Permission relay | Not declared, on purpose. The watch can't approve tool use |
-| Reply tool | None. It's one-way by design |
+| Reply tool | None. Claude's responses never reach the watch; only an optional one-line suggested next prompt does, encrypted with the same key |
 | Dependencies | Zero. One Node file, with no `node_modules` and no Bun required |
 | Manifest | Declares `channels`, and passes `claude plugin validate --strict` |
-| Tests | 39 server tests (protocol, crypto, dedupe, multi-session races, reconnects, stalls, re-pairing) plus watchOS simulator unit, UI, and end-to-end tests |
+| Tests | 40 server tests (protocol, crypto, dedupe, multi-session races, reconnects, stalls, re-pairing) plus watchOS simulator unit, UI, and end-to-end tests |
 | Privacy | [PRIVACY.md](../PRIVACY.md). No developer servers or analytics. The relay only sees ciphertext |
 
 ## Draft: plugin directory submission
