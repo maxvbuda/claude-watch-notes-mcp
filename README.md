@@ -35,7 +35,11 @@ Before you leave, start a session in the project you want Claude to work on. The
 watch-notes start             # add --continue to pick up your last conversation
 ```
 
-Ideas arrive in the session within seconds. Only sessions opened with `watch-notes start` take notes, so other Claude Code windows you have open won't grab them. `watch-notes start` runs `claude --permission-mode auto` with this plugin's channel turned on, and keeps your Mac awake while the session runs. Until Watch Notes is on Anthropic's approved channel list, Claude Code shows a warning about development channels first: choose **I am using this for local development**.
+Ideas arrive in the session within seconds. Only sessions opened with `watch-notes start` take notes, so other Claude Code windows you have open won't grab them.
+
+**Several chats:** run `watch-notes start` in as many projects as you like. Each one shows up on the watch by its folder name, or by a name you choose with `watch-notes start --name "Website"`. Pick one in the **To** row at the top of the app, and your notes go only to that chat. **Any chat** lets whichever one is open take it. A note for a chat that's closed waits until it opens again.
+
+**New chats from the watch:** run `watch-notes host ~/GitHub` (or any folder of projects) and leave it running. The watch then shows **New chat**, a browser for the folders inside it. Tap into any folder, then choose **Start chat here**, or type a name under **New folder…** to make a folder there and start in it. Your Mac opens a new Terminal window running `watch-notes start` in that folder, and the new chat is selected on the watch, so the next note goes straight to it. Only folders inside the one you gave can be opened (no `..` or symlinks out), and `node_modules` and hidden folders aren't listed. `watch-notes start` runs `claude --permission-mode auto` with this plugin's channel turned on, and keeps your Mac awake while the session runs. Until Watch Notes is on Anthropic's approved channel list, Claude Code shows a warning about development channels first: choose **I am using this for local development**.
 
 **Every few minutes (no warning):** in a normal `claude --permission-mode auto` session, run
 

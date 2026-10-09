@@ -11,63 +11,11 @@
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { CONFIG, DIR, RELAY, events, open, readConfig, seal } from './relay.mjs'
 
-const RELAY = process.env.CLAUDE_WATCH_NOTES_RELAY || 'https://ntfy.sh' // must match Relay.base in the watch app
-const DIR = process.env.CLAUDE_WATCH_NOTES_DIR || path.join(os.homedir(), '.claude-watch-notes')
 const NOTES = path.join(DIR, 'notes')
-const CONFIG = path.join(DIR, 'config.json')
 const CURSOR = path.join(DIR, 'cursor')
-const readConfig = () => { try { return JSON.parse(fs.readFileSync(CONFIG, 'utf8')) } catch { return null } }
-
-// AES-256-GCM in CryptoKit's "combined" layout: nonce(12) | ciphertext | tag(16), base64.
-function open(b64, key) {
-  const b = Buffer.from(b64, 'base64')
-  if (b.length < 29) throw new Error('short')
-  const d = crypto.createDecipheriv('aes-256-gcm', key, b.subarray(0, 12))
-  d.setAuthTag(b.subarray(-16))
-  return JSON.parse(Buffer.concat([d.update(b.subarray(12, -16)), d.final()]).toString('utf8'))
-}
-function seal(obj, key) {
-  const iv = crypto.randomBytes(12)
-  const c = crypto.createCipheriv('aes-256-gcm', key, iv)
-  const ct = Buffer.concat([c.update(JSON.stringify(obj)), c.final()])
-  return Buffer.concat([iv, ct, c.getAuthTag()]).toString('base64')
-}
-
-// Yields ntfy events from a streaming JSON subscription.
-// If nothing (not even a keepalive) arrives for `idleMs`, the connection is treated as dead.
-async function* events(url, signal, idleMs = Number(process.env.CLAUDE_WATCH_NOTES_IDLE_MS) || 120_000) {
-  const idle = new AbortController()
-  let timer
-  const kick = () => { clearTimeout(timer); timer = setTimeout(() => idle.abort(new Error('connection idle')), idleMs) }
-  kick()
-  try {
-    const res = await fetch(url, { signal: AbortSignal.any([signal, idle.signal]) })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    yield* lines(res.body, kick)
-  } catch (e) {
-    throw idle.signal.aborted && !signal.aborted ? idle.signal.reason : e
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-async function* lines(body, kick) {
-  const dec = new TextDecoder()
-  let pending = ''
-  for await (const chunk of body) {
-    kick()
-    pending += dec.decode(chunk, { stream: true })
-    let i
-    while ((i = pending.indexOf('\n')) >= 0) {
-      const line = pending.slice(0, i)
-      pending = pending.slice(i + 1)
-      if (line) yield JSON.parse(line)
-    }
-  }
-}
 
 // ---------- pair ----------
 // Code -> (pairing key, pairing topic) via HKDF. The watch derives the same pair,
@@ -113,6 +61,10 @@ let ready = false
 // opened is listening on the channel (it sets this). Others must not claim notes they'd ignore;
 // they can still work through them with watch_inbox.
 const CHANNEL = process.env.CLAUDE_WATCH_NOTES_CHANNEL === '1'
+// The chat's name on the watch (`watch-notes start --name`, else the project folder). Notes sent
+// to a chat by name only go to sessions with that name; notes sent to "any chat" go to any of them.
+const NAME = (process.env.CLAUDE_WATCH_NOTES_NAME || path.basename(process.cwd()) || 'Claude').slice(0, 40)
+const forMe = n => !n.to || n.to === NAME
 
 const INSTRUCTIONS = `Ideas the user jotted on their Apple Watch arrive from this server as <channel note_id="..." at="..."> events.
 The user is away from the computer and will not see or answer questions: treat each note as a task to complete autonomously in the current project, making reasonable assumptions (write them down in your final summary). Notes are terse, dictated, and may contain transcription errors.
@@ -154,21 +106,40 @@ function push(note) {
   })
 }
 
-// Suggestions go to "<topic>-s", sealed with the pairing key, so the watch can poll them.
-async function sendSuggestion(text, noteId) {
+// Messages back to the watch are sealed with the pairing key on side topics it polls:
+// "<topic>-s" for suggestions, "<topic>-c" for which chats are open.
+async function postBack(suffix, obj, timeout = 20_000) {
   const cfg = readConfig()
   if (!cfg) return false
   try {
-    const body = seal({ s: text, note: noteId, ts: new Date().toISOString() }, Buffer.from(cfg.key, 'base64'))
-    return (await fetch(`${cfg.topicURL}-s`, { method: 'POST', body, signal: AbortSignal.timeout(20_000) })).ok
+    const body = seal(obj, Buffer.from(cfg.key, 'base64'))
+    return (await fetch(`${cfg.topicURL}-${suffix}`, { method: 'POST', body, signal: AbortSignal.timeout(timeout) })).ok
   } catch { return false }
+}
+const sendSuggestion = (text, noteId) => postBack('s', { s: text, note: noteId, chat: NAME, ts: new Date().toISOString() })
+
+// Listening sessions announce themselves every minute so the watch can list them by name.
+const HEARTBEAT_MS = Number(process.env.CLAUDE_WATCH_NOTES_HEARTBEAT_MS) || 60_000
+const heartbeat = () => postBack('c', { chat: NAME, ts: new Date().toISOString() })
+if (CHANNEL) setInterval(heartbeat, HEARTBEAT_MS)
+let lastPairing = readConfig()?.topicURL
+fs.watchFile(CONFIG, { interval: 2000 }, () => { // re-paired: announce on the new topic right away
+  const t = readConfig()?.topicURL
+  if (CHANNEL && ready && t && t !== lastPairing) heartbeat()
+  lastPairing = t
+})
+
+async function quit() {
+  // Tell the watch this chat is gone, so it drops off the list now instead of in a few minutes.
+  if (CHANNEL && ready) await postBack('c', { chat: NAME, gone: true, ts: new Date().toISOString() }, 3000)
+  process.exit(0)
 }
 
 async function callTool(name, args = {}) {
   if (name === 'watch_inbox') {
     const pending = allNotes().filter(n => n.status !== 'done')
     return pending.length
-      ? pending.map(n => `note_id=${n.id} at=${n.at}\n${n.text}`).join('\n\n---\n\n')
+      ? pending.map(n => `note_id=${n.id} at=${n.at}${n.to ? ` to=${n.to}` : ''}\n${n.text}`).join('\n\n---\n\n')
       : 'No pending watch notes.'
   }
   if (name === 'watch_note_done') {
@@ -193,7 +164,7 @@ function handle(msg) {
     return out({ id, result: {
       protocolVersion: params?.protocolVersion || '2025-06-18',
       capabilities: { tools: {}, experimental: { 'claude/channel': {} } },
-      serverInfo: { name: 'watch-notes', version: '1.3.0' },
+      serverInfo: { name: 'watch-notes', version: '1.4.0' },
       instructions: INSTRUCTIONS,
     } })
   }
@@ -201,6 +172,7 @@ function handle(msg) {
     ready = true
     // Hand this session anything that arrived while no session was listening.
     sweep()
+    if (CHANNEL) heartbeat()
     return
   }
   if (id === undefined) return // other notifications
@@ -225,7 +197,9 @@ process.stdin.on('data', chunk => {
     if (line) try { handle(JSON.parse(line)) } catch (e) { log('bad message', e.message) }
   }
 })
-process.stdin.on('end', () => process.exit(0))
+process.stdin.on('end', quit)
+process.on('SIGTERM', quit)
+process.on('SIGINT', quit)
 
 // ---------- notes ----------
 // Several Claude Code sessions may run this server at once. Each note file is created
@@ -274,6 +248,7 @@ function sweep() {
 setInterval(sweep, Number(process.env.CLAUDE_WATCH_NOTES_SWEEP_MS) || 30_000)
 
 function claimAndPush(n, gen = 0) {
+  if (!forMe(n)) return
   try { fs.writeFileSync(claimFile(n.id, gen), `${process.pid} channel`, { flag: 'wx' }) } catch { return }
   n = { ...n, status: 'sent' }
   writeAtomic(noteFile(n.id), JSON.stringify(n, null, 2))
@@ -293,6 +268,7 @@ async function receive(ev, key) {
   if (!id) return
   const at = typeof p.ts === 'string' && !isNaN(Date.parse(p.ts)) ? p.ts : new Date(ev.time * 1000).toISOString()
   const note = { id, text: String(p.t ?? '').slice(0, 20000), at, status: 'new' }
+  if (typeof p.to === 'string' && p.to) note.to = p.to.slice(0, 40)
   // Created once: a retried or concurrently received copy of the same note fails here.
   // If another session saved it first, it may be one that isn't listening: still try to claim it.
   try { fs.writeFileSync(noteFile(id), JSON.stringify(note, null, 2), { flag: 'wx' }); log('note', id) } catch {}

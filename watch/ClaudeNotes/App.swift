@@ -19,7 +19,7 @@ struct ClaudeNotesApp: App {
             .environment(store)
         }
             .onChange(of: phase) {
-                if phase == .active { Task { await store.flush(); await store.checkSuggestion() } }
+                if phase == .active { Task { await store.flush(); await store.refresh() } }
             }
     }
 }
@@ -43,6 +43,7 @@ struct Note: Codable, Identifiable {
     let id: UUID
     let text: String
     let ts: Date
+    var to: String? = nil // chat name; nil means any chat
     var sent = false
 }
 
@@ -50,6 +51,20 @@ struct Note: Codable, Identifiable {
 struct Suggestion: Codable, Equatable {
     let id: String // relay message id
     let text: String
+    var chat: String? = nil // the chat that suggested it; accepting sends it back there
+}
+
+/// What the Mac posts back, sealed: suggestions on "<topic>-s"; on "<topic>-c", chat heartbeats
+/// and `watch-notes host`'s list of projects new chats can start in.
+private struct BackMessage: Decodable {
+    var s: String?
+    var chat: String?
+    var host: String?
+    var root: String?
+    var projects: [String]?
+    var gone: Bool?
+    var id: String? // folder listing replies on "<topic>-l"
+    var dirs: [String]?
 }
 
 @MainActor @Observable
@@ -65,6 +80,17 @@ final class Store {
         }
     }
     var suggestion: Suggestion? { didSet { defaults.set(try? JSONEncoder().encode(suggestion), forKey: "suggestion") } }
+    /// Open Claude Code chats (`watch-notes start` sessions), by name.
+    private(set) var chats: [String] = []
+    /// Projects `watch-notes host` can start a new chat in (empty when it isn't running).
+    private(set) var projects: [String] = []
+    /// The name of the host's folder (shown as the top of the folder browser).
+    private(set) var hostRoot: String?
+    /// Chats we asked the host to start that haven't announced themselves yet.
+    private(set) var starting: Set<String> = []
+    /// The chat new notes go to; nil sends to any open chat.
+    var target: String? { didSet { defaults.set(target, forKey: "target") } }
+    static let chatWindow = "3m" // chats announce themselves every minute
     private(set) var pairing = Keychain.load().flatMap { try? JSONDecoder().decode(Pairing.self, from: $0) }
     private var flushing = false
     private var retry: Task<Void, Never>?
@@ -78,6 +104,7 @@ final class Store {
         notes = (defaults.data(forKey: "notes")).flatMap { try? JSONDecoder().decode([Note].self, from: $0) } ?? []
         suggestionsOn = defaults.object(forKey: "suggestionsOn") as? Bool ?? true
         suggestion = (defaults.data(forKey: "suggestion")).flatMap { try? JSONDecoder().decode(Suggestion.self, from: $0) }
+        target = defaults.string(forKey: "target")
         #if targetEnvironment(simulator)
         if defaults.bool(forKey: "resetPairing") { setPairing(nil) } // UI tests start unpaired
         #endif
@@ -87,18 +114,18 @@ final class Store {
         let text = draft.joined(separator: "\n")
         guard !text.isEmpty else { return }
         draft = []
-        enqueue(text)
+        enqueue(text, to: target)
     }
 
     /// Sends Claude's suggestion back to it as a new note.
     func acceptSuggestion() {
         guard let s = suggestion else { return }
         suggestion = nil
-        enqueue(s.text)
+        enqueue(s.text, to: s.chat ?? target)
     }
 
-    private func enqueue(_ text: String) {
-        notes.insert(Note(id: UUID(), text: text, ts: .now), at: 0)
+    private func enqueue(_ text: String, to chat: String?) {
+        notes.insert(Note(id: UUID(), text: text, ts: .now, to: chat), at: 0)
         // Trim history, but never drop a note that hasn't been delivered yet.
         while notes.count > Self.keep, let i = notes.lastIndex(where: \.sent) { notes.remove(at: i) }
         save()
@@ -112,6 +139,92 @@ final class Store {
         save()
     }
 
+    func refresh() async {
+        await checkChats()
+        await checkSuggestion()
+    }
+
+    /// The chat picker's choices: open chats, plus the chosen one even while it's offline.
+    var chatChoices: [String] {
+        guard let target, !chats.contains(target) else { return chats }
+        return chats + [target]
+    }
+
+    /// Rebuilds the list of open chats from the last few minutes of heartbeats on "<topic>-c".
+    func checkChats() async {
+        guard let pairing else { return }
+        let url = URL(string: "\(pairing.topicURL.absoluteString)-c/json?poll=1&since=\(Self.chatWindow)")!
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              self.pairing?.topicURL == pairing.topicURL else { return }
+        var open = Set<String>()
+        var hostProjects: [String] = []
+        for msg in Self.messages(in: data, key: SymmetricKey(data: pairing.key)) {
+            if msg.body.host != nil {
+                hostProjects = msg.body.gone == true ? [] : msg.body.projects ?? []
+                if let root = msg.body.root { hostRoot = root }
+            }
+            guard let name = msg.body.chat, !name.isEmpty else { continue }
+            if msg.body.gone == true { open.remove(name) } else { open.insert(name) }
+        }
+        let sorted = open.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        if sorted != chats { chats = sorted }
+        if hostProjects != projects { projects = hostProjects }
+        starting.subtract(open)
+    }
+
+    /// Sends a sealed request to `watch-notes host` on "<topic>-n".
+    private func askHost(_ fields: [String: String]) async -> Bool {
+        guard let pairing else { return false }
+        var fields = fields
+        fields["ts"] = Date.now.ISO8601Format()
+        guard let body = try? JSONSerialization.data(withJSONObject: fields) else { return false }
+        return (try? await Ntfy.publish(body, key: SymmetricKey(data: pairing.key), to: URL(string: pairing.topicURL.absoluteString + "-n")!)) != nil
+    }
+
+    /// The subfolders of `path` (relative to the host's folder; "" is the top), or nil if the Mac didn't answer.
+    func listFolders(_ path: String, polls: Int = 20) async -> [String]? {
+        guard let pairing else { return nil }
+        let id = UUID().uuidString
+        let since = Int(Date.now.timeIntervalSince1970) - 1
+        guard await askHost(["ls": path, "id": id]) else { return nil }
+        let url = URL(string: "\(pairing.topicURL.absoluteString)-l/json?poll=1&since=\(since)")!
+        for _ in 0..<polls {
+            try? await Task.sleep(for: .milliseconds(600))
+            guard let (data, _) = try? await URLSession.shared.data(from: url) else { continue }
+            if let reply = Self.messages(in: data, key: SymmetricKey(data: pairing.key)).first(where: { $0.body.id == id }) {
+                return reply.body.dirs ?? []
+            }
+        }
+        return nil
+    }
+
+    /// Asks `watch-notes host` to open a new chat in `path` (relative to its folder), optionally in a
+    /// new folder made there first, and points new notes at it. Notes sent before it's up wait for it.
+    /// Returns false if the request couldn't be sent.
+    func startChat(in path: String, newFolder: String? = nil) async -> Bool {
+        let base = newFolder ?? path.split(separator: "/").last.map(String.init) ?? hostRoot ?? "Chat"
+        var name = base, n = 1
+        while chats.contains(name) || starting.contains(name) { n += 1; name = "\(base) \(n)" }
+        var fields = ["path": path, "name": name]
+        fields["create"] = newFolder
+        guard await askHost(fields) else { return false }
+        starting.insert(name)
+        target = name
+        WKInterfaceDevice.current().play(.success)
+        return true
+    }
+
+    /// Decrypts a relay poll response, oldest first, skipping anything not sealed with our key.
+    private static func messages(in data: Data, key: SymmetricKey) -> [(id: String, body: BackMessage)] {
+        data.split(separator: UInt8(ascii: "\n")).compactMap { line in
+            guard let ev = try? JSONDecoder().decode(Ntfy.Event.self, from: line), let id = ev.id,
+                  let box = ev.message.flatMap({ Data(base64Encoded: $0) }),
+                  let plain = try? AES.GCM.open(AES.GCM.SealedBox(combined: box), using: key),
+                  let body = try? JSONDecoder().decode(BackMessage.self, from: plain) else { return nil }
+            return (id, body)
+        }
+    }
+
     /// Picks up the newest suggestion the Mac posted to "<topic>-s" since we last looked.
     func checkSuggestion() async {
         guard suggestionsOn, let pairing else { return }
@@ -119,21 +232,22 @@ final class Store {
         let url = URL(string: "\(pairing.topicURL.absoluteString)-s/json?poll=1&since=\(since)")!
         guard let (data, _) = try? await URLSession.shared.data(from: url),
               suggestionsOn, self.pairing?.topicURL == pairing.topicURL else { return } // changed meanwhile
-        let key = SymmetricKey(data: pairing.key)
+        // Advance past everything seen, including junk, so it isn't fetched again.
         for line in data.split(separator: UInt8(ascii: "\n")) {
-            guard let ev = try? JSONDecoder().decode(Ntfy.Event.self, from: line),
-                  let id = ev.id, let box = ev.message.flatMap({ Data(base64Encoded: $0) }) else { continue }
-            defaults.set(id, forKey: "suggestionSince")
-            guard let plain = try? AES.GCM.open(AES.GCM.SealedBox(combined: box), using: key),
-                  let text = (try? JSONDecoder().decode([String: String].self, from: plain))?["s"],
-                  !text.isEmpty else { continue }
-            suggestion = Suggestion(id: id, text: text)
+            if let id = (try? JSONDecoder().decode(Ntfy.Event.self, from: line))?.id { defaults.set(id, forKey: "suggestionSince") }
+        }
+        if let (id, body) = Self.messages(in: data, key: SymmetricKey(data: pairing.key)).last(where: { $0.body.s?.isEmpty == false }) {
+            suggestion = Suggestion(id: id, text: body.s!, chat: body.chat)
         }
     }
 
     func setPairing(_ p: Pairing?) {
         pairing = p
         suggestion = nil
+        chats = []
+        projects = []
+        starting = []
+        target = nil
         defaults.removeObject(forKey: "suggestionSince")
         Keychain.save(p.flatMap { try? JSONEncoder().encode($0) })
         if p != nil { WKInterfaceDevice.current().play(.success); Task { await flush() } }
@@ -169,9 +283,9 @@ final class Store {
 
     nonisolated private static func post(_ note: Note, to pairing: Pairing) async -> Bool {
         do {
-            let payload = try JSONSerialization.data(withJSONObject: [
-                "id": note.id.uuidString, "t": note.text, "ts": note.ts.ISO8601Format(),
-            ])
+            var fields = ["id": note.id.uuidString, "t": note.text, "ts": note.ts.ISO8601Format()]
+            fields["to"] = note.to
+            let payload = try JSONSerialization.data(withJSONObject: fields)
             return try await Ntfy.publish(payload, key: SymmetricKey(data: pairing.key), to: pairing.topicURL) != nil
         } catch {
             return false
@@ -333,13 +447,14 @@ struct EditorView: View {
     @Environment(Store.self) private var store
     @State private var line = ""
     @State private var showSettings = false
+    @State private var showNewChat = false
     private let accent = Color(red: 0.85, green: 0.47, blue: 0.34)
 
     var body: some View {
         @Bindable var store = store
         List {
             if let s = store.suggestion {
-                Section("Suggestion") {
+                Section(s.chat.map { "Suggestion · \($0)" } ?? "Suggestion") {
                     Text(s.text).font(.footnote)
                         .swipeActions { Button("Dismiss", role: .destructive) { store.suggestion = nil } }
                     Button(action: store.acceptSuggestion) {
@@ -347,6 +462,22 @@ struct EditorView: View {
                     }
                     .foregroundStyle(accent)
                 }
+            }
+
+            // Which Claude Code chat to talk to, once any are open.
+            if !store.chatChoices.isEmpty {
+                Picker("To", selection: $store.target) {
+                    Text("Any chat").tag(String?.none)
+                    ForEach(store.chatChoices, id: \.self) { name in
+                        Text(store.chats.contains(name) ? name
+                             : store.starting.contains(name) ? "\(name) (starting…)" : "\(name) (offline)")
+                            .tag(Optional(name))
+                    }
+                }
+                .pickerStyle(.navigationLink)
+            }
+            if !store.projects.isEmpty {
+                Button { showNewChat = true } label: { Label("New chat", systemImage: "plus.bubble") }
             }
 
             Section {
@@ -363,7 +494,10 @@ struct EditorView: View {
                 Section("Handed off") {
                     ForEach(store.notes) { note in
                         HStack(alignment: .top) {
-                            Text(note.text).font(.caption2).lineLimit(2).foregroundStyle(.secondary)
+                            VStack(alignment: .leading) {
+                                Text(note.text).font(.caption2).lineLimit(2).foregroundStyle(.secondary)
+                                if let to = note.to { Text("→ \(to)").font(.caption2).foregroundStyle(accent) }
+                            }
                             Spacer(minLength: 4)
                             Image(systemName: note.sent ? "checkmark" : "clock")
                                 .font(.caption2).foregroundStyle(note.sent ? accent : .secondary)
@@ -378,10 +512,10 @@ struct EditorView: View {
                 .listRowBackground(Color.clear)
         }
         .navigationTitle("Ideas")
-        // Watch for suggestions while the list is on screen (watchOS suspends us otherwise).
+        // Watch for chats and suggestions while the list is on screen (watchOS suspends us otherwise).
         .task {
             while !Task.isCancelled {
-                await store.checkSuggestion()
+                await store.refresh()
                 try? await Task.sleep(for: .seconds(20))
             }
         }
@@ -398,6 +532,11 @@ struct EditorView: View {
             }
         }
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showNewChat) {
+            NavigationStack {
+                FolderView(path: "", title: store.hostRoot ?? "New chat") { showNewChat = false }
+            }
+        }
     }
 
     private func commitLine() {
@@ -441,6 +580,63 @@ struct SettingsView: View {
             } message: {
                 Text("You'll need to run pair on your Mac again.")
             }
+        }
+    }
+}
+
+/// Browses the folders `watch-notes host` shares, to pick where a new Claude Code chat starts:
+/// here, in a new folder made here, or deeper in.
+struct FolderView: View {
+    let path: String // relative to the host's folder; "" is the top
+    let title: String
+    let close: () -> Void
+    @Environment(Store.self) private var store
+    @State private var dirs: [String]?
+    @State private var unreachable = false
+    @State private var busy = false
+    @State private var failed = false
+    @State private var newFolder = ""
+
+    var body: some View {
+        List {
+            Button { start() } label: { Label("Start chat here", systemImage: "plus.bubble") }
+                .disabled(busy)
+            TextField("New folder…", text: $newFolder)
+                .onSubmit { start(newFolder: newFolder) }
+                .disabled(busy)
+            if busy { HStack { ProgressView().frame(width: 24); Text("Starting…") } }
+            if failed { Text("Couldn't reach your Mac. Try again.").font(.footnote).foregroundStyle(.red) }
+
+            Section("Folders") {
+                if let dirs {
+                    if dirs.isEmpty { Text("No folders").font(.footnote).foregroundStyle(.secondary) }
+                    ForEach(dirs, id: \.self) { dir in
+                        NavigationLink {
+                            FolderView(path: path.isEmpty ? dir : "\(path)/\(dir)", title: dir, close: close)
+                        } label: { Label(dir, systemImage: "folder") }
+                    }
+                } else if unreachable {
+                    Text("Your Mac didn't answer. Is watch-notes host running?").font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    ProgressView()
+                }
+            }
+        }
+        .navigationTitle(title)
+        .task {
+            if path.isEmpty { dirs = store.projects } // already known: show it at once, then refresh
+            if let fresh = await store.listFolders(path) { dirs = fresh } else if dirs == nil { unreachable = true }
+        }
+    }
+
+    private func start(newFolder: String? = nil) {
+        let folder = newFolder?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let folder, folder.isEmpty || folder.contains("/") || folder.hasPrefix(".") { return }
+        busy = true
+        failed = false
+        Task {
+            if await store.startChat(in: path, newFolder: folder) { close() } else { failed = true }
+            busy = false
         }
     }
 }

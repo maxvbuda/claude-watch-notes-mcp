@@ -22,7 +22,7 @@ const code = () => Array.from({ length: 8 }, () => 'ABCDEFGHJKMNPQRSTUVWXYZ23456
 const mock = await startMock({ port: 8799 })
 const relay = REAL ? 'https://ntfy.sh' : mock.url
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cwn-e2e-'))
-const env = { ...process.env, CLAUDE_WATCH_NOTES_DIR: dir, CLAUDE_WATCH_NOTES_RELAY: relay, CLAUDE_WATCH_NOTES_NO_SIM: '1', CLAUDE_WATCH_NOTES_CHANNEL: '1' }
+const env = { ...process.env, CLAUDE_WATCH_NOTES_DIR: dir, CLAUDE_WATCH_NOTES_RELAY: relay, CLAUDE_WATCH_NOTES_NO_SIM: '1', CLAUDE_WATCH_NOTES_CHANNEL: '1', CLAUDE_WATCH_NOTES_NAME: 'e2e-chat' }
 
 // The MCP server, as Claude Code would run it.
 const server = spawn(process.execPath, [SERVER], { env, stdio: ['pipe', 'pipe', 'inherit'] })
@@ -36,6 +36,13 @@ server.stdout.on('data', d => {
     if (m.method === 'notifications/claude/channel') pushes.push(m.params.content)
   }
 })
+// `watch-notes host` in dry-run mode: records which chats the watch asks it to start.
+const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cwn-e2e-root-')))
+fs.mkdirSync(path.join(root, 'e2e-project/sub'), { recursive: true })
+const host = spawn(process.execPath, [path.join(ROOT, 'cli/watch-notes.mjs'), 'host', root], { env: { ...env, CLAUDE_WATCH_NOTES_HOST_DRYRUN: '1' } })
+let hostOut = ''
+host.stdout.on('data', d => { hostOut += d })
+
 server.stdin.write('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
 
 function startPair(c) {
@@ -88,6 +95,14 @@ try {
   for (let i = 1; i <= 15; i++) once(`e2e trim ${i}`)
   once('e2e accepted suggestion')
   once('e2e history 1')
+  once('e2e to chat')
+  const launches = [...hostOut.matchAll(/^LAUNCH (.*)$/gm)].map(m => JSON.parse(m[1]))
+  assert.deepEqual(launches.map(l => [l.dir, l.name]), [
+    [path.join(root, 'e2e-project'), 'e2e-project'],
+    [path.join(root, 'e2e-project/sub/from-watch'), 'from-watch'],
+  ], 'host did not start the requested chats')
+  assert.ok(fs.statSync(path.join(root, 'e2e-project/sub/from-watch')).isDirectory())
+  assert.equal(pushes.filter(p => p === 'e2e to elsewhere').length, 0, 'a note for another chat was delivered here')
   assert.equal(pushes.filter(p => p.startsWith('unsent')).length, 0)
   console.log(`  ✔ MCP server received all ${pushes.length} notes exactly once, in order\n`)
   }
@@ -108,6 +123,7 @@ try {
   console.error(`  pushes: ${JSON.stringify(pushes.map(p => p.slice(0, 40)))}`)
 } finally {
   server.kill()
+  host.kill()
   await mock.close()
 }
 process.exit(failed ? 1 : 0)

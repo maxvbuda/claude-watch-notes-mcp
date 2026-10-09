@@ -21,10 +21,26 @@ final class ClaudeNotesUITests: XCTestCase {
         XCTAssertTrue(send.waitForExistence(timeout: 30), "pairing never completed, or Send isn't on screen")
         XCTAssertTrue(send.isHittable, "Send must be reachable without scrolling")
 
+        // The e2e MCP server is an open chat named "e2e-chat": the To picker lists it.
+        let to = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'To'")).firstMatch
+        XCTAssertTrue(to.waitForExistence(timeout: 30), "no To picker for the open chat")
+        to.tap()
+        XCTAssertTrue(app.buttons["e2e-chat"].waitForExistence(timeout: 5) || app.staticTexts["e2e-chat"].exists, "chat not listed")
+        XCTAssertTrue(app.buttons["Any chat"].exists || app.staticTexts["Any chat"].exists)
+        let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.lifetime = .keepAlways; add(screenshot)
+        // Choosing a chat closes the picker and shows it on the To row; the note will go to it.
+        (app.buttons["e2e-chat"].exists ? app.buttons["e2e-chat"] : app.staticTexts["e2e-chat"]).tap()
+        XCTAssertTrue(app.buttons["To, e2e-chat"].waitForExistence(timeout: 5), "picker didn't close with the chat chosen")
+        // Back on the editor once the picker has popped and Send is tappable again.
+        let back = NSPredicate(format: "hittable == true")
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: back, evaluatedWith: send)], timeout: 10), .completed, "didn't return from the picker")
+        sleep(1) // let the pop animation settle
+
         // The draft lines from launch arguments are shown, and sending hands them off.
         XCTAssertTrue(app.staticTexts["e2e ui line 1"].exists)
         send.tap()
         XCTAssertTrue(app.images["Delivered"].waitForExistence(timeout: 15), "note never showed as delivered")
+        XCTAssertTrue(app.staticTexts["→ e2e-chat"].exists, "history doesn't show which chat it went to")
         XCTAssertFalse(app.buttons["Send to Claude"].exists, "draft should be cleared after sending")
 
         // Settings: the Suggestions switch is there and on by default.

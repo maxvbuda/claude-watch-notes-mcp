@@ -73,6 +73,65 @@ final class ClaudeNotesTests: XCTestCase {
         }
     }
 
+    // MARK: chats
+
+    func testChatsAreListedByNameAndNotesGoToTheChosenChat() async throws {
+        let p = try XCTUnwrap(Self.pairing)
+        let store = freshStore()
+        store.setPairing(p)
+        let chatsTopic = URL(string: p.topicURL.absoluteString + "-c")!
+        func announce(_ fields: [String: Any]) async throws {
+            _ = try await Ntfy.publish(try JSONSerialization.data(withJSONObject: fields), key: SymmetricKey(data: p.key), to: chatsTopic)
+        }
+        try await announce(["chat": "zeta"])
+        try await announce(["chat": "alpha"])
+        try await announce(["chat": "closed chat"])
+        try await announce(["chat": "closed chat", "gone": true])
+        _ = try await Ntfy.publish(Data("{\"chat\":\"intruder\"}".utf8), key: SymmetricKey(size: .bits256), to: chatsTopic)
+
+        // The e2e MCP server (a listening session named "e2e-chat") announces itself too.
+        try await wait("chats listed") {
+            Task { await store.checkChats() }
+            return store.chats.contains("e2e-chat")
+        }
+        XCTAssertEqual(store.chats, ["alpha", "e2e-chat", "zeta"])
+
+        store.target = "e2e-chat"
+        store.draft = ["e2e to chat"]
+        store.send()
+        store.target = "elsewhere" // not open: still selectable, shown as offline, and nobody takes it
+        XCTAssertEqual(store.chatChoices, ["alpha", "e2e-chat", "zeta", "elsewhere"])
+        store.draft = ["e2e to elsewhere"]
+        store.send()
+        XCTAssertEqual(store.notes.map(\.to), ["elsewhere", "e2e-chat"])
+        try await wait("both delivered to the relay") { store.pending == 0 }
+        XCTAssertEqual(Store(defaults: store.defaults).target, "elsewhere") // remembered
+    }
+
+    func testNewChatIsRequestedFromTheHostAndSelected() async throws {
+        let store = freshStore()
+        store.setPairing(try XCTUnwrap(Self.pairing))
+        // The e2e harness runs `watch-notes host` (dry run) on a folder holding "e2e-project".
+        try await wait("host's projects listed") {
+            Task { await store.checkChats() }
+            return store.projects.contains("e2e-project")
+        }
+        let ok = await store.startChat(in: "e2e-project")
+        XCTAssertTrue(ok)
+        XCTAssertEqual(store.target, "e2e-project")
+        XCTAssertTrue(store.starting.contains("e2e-project"))
+        XCTAssertTrue(store.chatChoices.contains("e2e-project"))
+
+        // Folder browsing, then a chat in a new folder made deeper in.
+        let listed = await store.listFolders("e2e-project")
+        XCTAssertEqual(listed, ["sub"])
+        let outside = await store.listFolders("../")
+        XCTAssertEqual(outside, [])
+        let made = await store.startChat(in: "e2e-project/sub", newFolder: "from-watch")
+        XCTAssertTrue(made)
+        XCTAssertEqual(store.target, "from-watch")
+    }
+
     // MARK: suggestions
 
     func testSuggestionIsPickedUpAndAcceptedAsANote() async throws {

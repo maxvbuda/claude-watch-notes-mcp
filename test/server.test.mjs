@@ -245,6 +245,7 @@ describe('delivery', () => {
     assert.doesNotMatch(ev.message, /add tests/) // relay only sees ciphertext
     const got = openBox(ev.message, cfg.key)
     assert.equal(got.s, 'add tests for it'); assert.equal(got.note, n.id)
+    assert.equal(typeof got.chat, 'string')
     const saved = JSON.parse(fs.readFileSync(path.join(dir, 'notes', `${n.id}.json`), 'utf8'))
     assert.equal(saved.suggestion, 'add tests for it')
   })
@@ -315,6 +316,44 @@ describe('sessions, restarts and the network', () => {
     for (const n of [fresh, listener, exitedListener, done]) assert.equal(s.pushes().filter(m => m.params.meta.note_id === n.id).length, 0, n.text)
     assert.ok(fs.existsSync(path.join(notes, `${exited.id}.claim.1`)))
     await s.stop()
+  })
+
+  test('chats: a note sent to a chat by name only goes to that chat; untargeted notes go to any', async () => {
+    const dir = tmpDir(); const cfg = pairDir(dir)
+    const web = startServer(dir, { env: { CLAUDE_WATCH_NOTES_NAME: 'website' } })
+    const app = startServer(dir, { env: { CLAUDE_WATCH_NOTES_NAME: 'app' } })
+    await Promise.all([web.ready, app.ready]); await connected(cfg.topic, 2)
+    const toApp = note('for app', { to: 'app' }), toWeb = note('for website', { to: 'website' }), any = note('for anyone')
+    const toGone = note('for a chat that is not open', { to: 'closed' })
+    for (const n of [toApp, toWeb, any, toGone]) await post(cfg.topicURL, seal(n, cfg.key))
+    await app.waitFor(pushFor(toApp.id)); await web.waitFor(pushFor(toWeb.id))
+    await sleep(500)
+    assert.equal(web.pushes().filter(pushFor(toApp.id)).length, 0)
+    assert.equal(app.pushes().filter(pushFor(toWeb.id)).length, 0)
+    assert.equal([...web.pushes(), ...app.pushes()].filter(pushFor(any.id)).length, 1)
+    assert.equal([...web.pushes(), ...app.pushes()].filter(pushFor(toGone.id)).length, 0)
+    // It waits for that chat: delivered when a session with that name starts.
+    const closed = startServer(dir, { env: { CLAUDE_WATCH_NOTES_NAME: 'closed' } })
+    await closed.waitFor(pushFor(toGone.id))
+    await Promise.all([web.stop(), app.stop(), closed.stop()])
+  })
+
+  test('chats: listening sessions announce their name (sealed) and say goodbye on exit', async () => {
+    const dir = tmpDir(); const cfg = pairDir(dir)
+    const quiet = startServer(dir, { env: { CLAUDE_WATCH_NOTES_CHANNEL: '', CLAUDE_WATCH_NOTES_NAME: 'not listening' } })
+    const s = startServer(dir, { env: { CLAUDE_WATCH_NOTES_NAME: 'website', CLAUDE_WATCH_NOTES_HEARTBEAT_MS: '300' } })
+    await Promise.all([quiet.ready, s.ready])
+    const chats = async () => (await (await fetch(`${cfg.topicURL}-c/json?poll=1&since=all`)).text())
+      .trim().split('\n').filter(Boolean).map(l => openBox(JSON.parse(l).message, cfg.key))
+    const end = Date.now() + 5000
+    while ((await chats()).length < 3 && Date.now() < end) await sleep(100)
+    let got = await chats()
+    assert.ok(got.length >= 3, 'initial + periodic heartbeats')
+    assert.ok(got.every(c => c.chat === 'website' && !c.gone))
+    await s.stop(); await quiet.stop()
+    got = await chats()
+    assert.equal(got.at(-1).gone, true)
+    assert.equal(got.filter(c => c.chat !== 'website').length, 0)
   })
 
   test('notes that arrive before the session is ready are pushed on initialize', async () => {
@@ -434,6 +473,82 @@ describe('sessions, restarts and the network', () => {
     assert.equal(s.pushes().filter(pushFor(stale.id)).length, 0)
     assert.ok(fs.readFileSync(path.join(dir, 'cursor'), 'utf8').startsWith(fresh.topicURL))
     await s.stop()
+  })
+})
+
+describe('host command (new chats from the watch)', () => {
+  const CLI = new URL('../cli/watch-notes.mjs', import.meta.url).pathname
+  test('lists projects, opens only listed ones, ignores stale/forged requests, quotes names safely', async () => {
+    const dir = tmpDir(); const cfg = pairDir(dir)
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cwn-root-')))
+    for (const d of ['website', 'app', '.hidden', 'website/src', 'website/src/deep', 'website/node_modules']) fs.mkdirSync(path.join(root, d))
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'cwn-outside-'))
+    fs.symlinkSync(outside, path.join(root, 'escape-link'))
+    fs.symlinkSync(path.join(root, 'app'), path.join(root, 'app-link'))
+    fs.writeFileSync(path.join(root, 'notes.txt'), '')
+    const h = spawn(process.execPath, [CLI, 'host', root], {
+      env: { ...process.env, CLAUDE_WATCH_NOTES_DIR: dir, CLAUDE_WATCH_NOTES_RELAY: mock.url, CLAUDE_WATCH_NOTES_HOST_DRYRUN: '1' },
+    })
+    spawned.add(h)
+    let out = ''
+    h.stdout.on('data', d => { out += d })
+    const announced = async () => (await (await fetch(`${cfg.topicURL}-c/json?poll=1&since=all`)).text())
+      .trim().split('\n').filter(Boolean).map(l => openBox(JSON.parse(l).message, cfg.key))
+    let end = Date.now() + 5000
+    while (!(await announced()).length && Date.now() < end) await sleep(50)
+    const [a] = await announced()
+    assert.deepEqual(a.projects, ['app', 'app-link', 'website']) // symlinks only when they stay inside
+    assert.equal(typeof a.host, 'string')
+    await connected(`${cfg.topic}-n`)
+
+    const ask = (r, key = cfg.key) => post(`${cfg.topicURL}-n`, seal({ ts: new Date().toISOString(), ...r }, key))
+    const evil = "it's $(touch pwned) `x` \"q\""
+    await ask({ project: '../..', name: 'escape' })
+    await ask({ project: 'website', name: 'stale', ts: new Date(Date.now() - 11 * 60_000).toISOString() })
+    await ask({ project: 'website', name: 'forged' }, crypto.randomBytes(32))
+    await ask({ path: 'escape-link', name: 'symlink escape' })
+    await ask({ path: 'website', create: '../breakout', name: 'bad folder' })
+    await ask({ project: 'website', name: evil }) // the old watch build's field
+    await ask({ path: 'website/src/deep', name: 'deep' })
+    await ask({ path: 'website/src', create: 'made-on-watch' })
+    end = Date.now() + 5000
+    while ((out.match(/^LAUNCH/gm) || []).length < 3 && Date.now() < end) await sleep(50)
+    await sleep(300)
+    const launches = [...out.matchAll(/^LAUNCH (.*)$/gm)].map(m => JSON.parse(m[1]))
+    assert.deepEqual(launches.map(l => [l.dir, l.name]), [
+      [path.join(root, 'website'), evil],
+      [path.join(root, 'website/src/deep'), 'deep'],
+      [path.join(root, 'website/src/made-on-watch'), 'made-on-watch'],
+    ], out)
+    assert.ok(fs.statSync(path.join(root, 'website/src/made-on-watch')).isDirectory())
+    assert.ok(!fs.existsSync(path.join(root, 'breakout')) && !fs.existsSync(path.join(root, 'website/breakout')))
+
+    // Folder browsing: listings come back sealed on "<topic>-l"; paths outside the root get none.
+    const lsReply = async (ls) => {
+      const id = crypto.randomUUID()
+      await ask({ ls, id })
+      const stop = Date.now() + 5000
+      while (Date.now() < stop) {
+        const got = (await (await fetch(`${cfg.topicURL}-l/json?poll=1&since=all`)).text()).trim().split('\n').filter(Boolean)
+          .map(l => openBox(JSON.parse(l).message, cfg.key)).find(m => m.id === id)
+        if (got) return got
+        await sleep(50)
+      }
+      throw new Error('no listing reply')
+    }
+    assert.deepEqual((await lsReply('')).dirs, ['app', 'app-link', 'website'])
+    assert.deepEqual((await lsReply('website')).dirs, ['src']) // node_modules hidden
+    assert.deepEqual((await lsReply('website/src')).dirs, ['deep', 'made-on-watch'])
+    assert.equal((await lsReply('../')).dirs, null)
+    assert.equal((await lsReply('escape-link')).dirs, null)
+    // The name reaches `watch-notes start` as one literal argument: no command runs.
+    const nameArg = launches[0].script.match(/--name (.*)$/m)[1]
+    const { execFileSync } = await import('node:child_process')
+    assert.equal(execFileSync('/bin/sh', ['-c', `printf %s ${nameArg}`], { cwd: root }).toString(), evil)
+    assert.ok(!fs.existsSync(path.join(root, 'pwned')))
+
+    h.kill('SIGTERM'); await new Promise(r => h.on('exit', r))
+    assert.equal((await announced()).at(-1).gone, true)
   })
 })
 
