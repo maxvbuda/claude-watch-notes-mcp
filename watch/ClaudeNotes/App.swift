@@ -24,7 +24,7 @@ struct ClaudeNotesApp: App {
     }
 }
 
-/// Relay that carries ciphertext between watch and Mac. Must match RELAY in plugin/server/watch-notes.mjs.
+/// Relay that carries ciphertext between watch and Mac. Must match RELAY in plugin/server/handoff.mjs.
 enum Relay {
     #if targetEnvironment(simulator)
     // Tests point the simulator at a local mock relay with `-relay http://127.0.0.1:PORT`.
@@ -55,7 +55,7 @@ struct Suggestion: Codable, Equatable {
 }
 
 /// What the Mac posts back, sealed: suggestions on "<topic>-s"; on "<topic>-c", chat heartbeats
-/// and `watch-notes host`'s list of projects new chats can start in.
+/// and `handoff host`'s list of projects new chats can start in.
 private struct BackMessage: Decodable {
     var s: String?
     var chat: String?
@@ -80,9 +80,9 @@ final class Store {
         }
     }
     var suggestion: Suggestion? { didSet { defaults.set(try? JSONEncoder().encode(suggestion), forKey: "suggestion") } }
-    /// Open Claude Code chats (`watch-notes start` sessions), by name.
+    /// Open Claude Code chats (`handoff start` sessions), by name.
     private(set) var chats: [String] = []
-    /// Projects `watch-notes host` can start a new chat in (empty when it isn't running).
+    /// Projects `handoff host` can start a new chat in (empty when it isn't running).
     private(set) var projects: [String] = []
     /// The name of the host's folder (shown as the top of the folder browser).
     private(set) var hostRoot: String?
@@ -172,7 +172,7 @@ final class Store {
         starting.subtract(open)
     }
 
-    /// Sends a sealed request to `watch-notes host` on "<topic>-n".
+    /// Sends a sealed request to `handoff host` on "<topic>-n".
     private func askHost(_ fields: [String: String]) async -> Bool {
         guard let pairing else { return false }
         var fields = fields
@@ -203,7 +203,7 @@ final class Store {
         newFolder ?? path.split(separator: "/").last.map(String.init) ?? hostRoot ?? "Chat"
     }
 
-    /// Asks `watch-notes host` to open a new chat in `path` (relative to its folder), optionally in a
+    /// Asks `handoff host` to open a new chat in `path` (relative to its folder), optionally in a
     /// new folder made there first, and points new notes at it. Notes sent before it's up wait for it.
     /// `name` is the chat's name (default: the folder's). Returns false if the request couldn't be sent.
     func startChat(in path: String, newFolder: String? = nil, name custom: String? = nil) async -> Bool {
@@ -301,7 +301,7 @@ final class Store {
 
 enum PairError: Error { case badCode, noAnswer }
 
-/// One-time pairing. The code shown by `watch-notes pair` derives (via HKDF) a pairing key
+/// One-time pairing. The code shown by `handoff pair` derives (via HKDF) a pairing key
 /// and topic. We generate our own topic + key, send them sealed with the pairing key, and wait
 /// for the Mac's sealed ack. A mistyped code derives a different topic, so nothing answers.
 enum Pairer {
@@ -404,7 +404,7 @@ struct PairView: View {
 
     var body: some View {
         List {
-            Text("On your Mac, run:\nwatch-notes pair\nthen enter the code.")
+            Text("On your Mac, run:\nhandoff pair\nthen enter the code.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .listRowBackground(Color.clear)
             TextField("Pairing code", text: $code)
@@ -420,7 +420,7 @@ struct PairView: View {
         }
         .navigationTitle("Pair")
         #if targetEnvironment(simulator)
-        // `watch-notes pair` launches the simulator app with `-pairCode <code>`, so no typing is needed.
+        // `handoff pair` launches the simulator app with `-pairCode <code>`, so no typing is needed.
         .task {
             // Use a launch-argument code once; after Unpair, don't retry a stale one.
             if !Self.usedLaunchCode, let c = UserDefaults.standard.string(forKey: "pairCode") {
@@ -590,7 +590,7 @@ struct SettingsView: View {
     }
 }
 
-/// Browses the folders `watch-notes host` shares, to pick where a new Claude Code chat starts:
+/// Browses the folders `handoff host` shares, to pick where a new Claude Code chat starts:
 /// here, in a new folder made here, or deeper in.
 struct FolderView: View {
     let path: String // relative to the host's folder; "" is the top
@@ -622,7 +622,7 @@ struct FolderView: View {
                         } label: { Label(dir, systemImage: "folder") }
                     }
                 } else if unreachable {
-                    Text("Your Mac didn't answer. Is watch-notes host running?").font(.footnote).foregroundStyle(.secondary)
+                    Text("Your Mac didn't answer. Is handoff host running?").font(.footnote).foregroundStyle(.secondary)
                 } else {
                     ProgressView()
                 }

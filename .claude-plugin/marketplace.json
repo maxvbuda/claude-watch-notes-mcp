@@ -1,10 +1,10 @@
 {
-  "name": "watch-notes",
+  "name": "handoff",
   "owner": { "name": "Max Buda", "url": "https://github.com/maxvbuda" },
-  "metadata": { "description": "Watch Notes: send ideas from your Apple Watch to Claude Code." },
+  "metadata": { "description": "Handoff: send ideas from your Apple Watch to Claude Code." },
   "plugins": [
     {
-      "name": "watch-notes",
+      "name": "handoff",
       "source": "./plugin",
       "description": "Jot ideas on your Apple Watch and Claude Code works on them while you're away."
     }

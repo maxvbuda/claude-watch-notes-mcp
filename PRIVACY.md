@@ -1,8 +1,8 @@
-# Privacy Policy: Watch Notes
+# Privacy Policy: Handoff
 
 _Last updated: October 8, 2026_
 
-Watch Notes has two parts: an Apple Watch app and a Claude Code plugin that runs on your own Mac. The developer runs no servers and collects no data.
+Handoff has two parts: an Apple Watch app and a Claude Code plugin that runs on your own Mac. The developer runs no servers and collects no data.
 
 ## What the watch app does with your notes
 
@@ -17,11 +17,11 @@ Watch Notes has two parts: an Apple Watch app and a Claude Code plugin that runs
 - It passes each note to your Claude Code session. Claude Code then processes it under your Anthropic account, like anything you type into Claude Code. See [Anthropic's privacy policy](https://www.anthropic.com/legal/privacy).
 - When Claude finishes a note, it records a short summary with the plugin's `watch_note_done` tool. The summary is saved in the same place, on your Mac only, and is never sent to the relay or anywhere else.
 - Claude can also include a one-line suggested next prompt. It's encrypted with the same key and sent through the relay to the watch, which shows it with an **Accept suggestion** button. Claude's response itself is never sent to the watch.
-- Each Claude Code session started with `watch-notes start` sends the watch its chat name (your folder's name, or one you choose) about once a minute, encrypted, so the watch can list open chats. Notes you address to a chat carry that name too.
+- Each Claude Code session started with `handoff start` sends the watch its chat name (your folder's name, or one you choose) about once a minute, encrypted, so the watch can list open chats. Notes you address to a chat carry that name too.
 
-## What `watch-notes host` does (optional)
+## What `handoff host` does (optional)
 
-If you run `watch-notes host` on your Mac, the watch can start new chats:
+If you run `handoff host` on your Mac, the watch can start new chats:
 
 - It sends the watch the names of the folders inside the folder you gave it, encrypted, so you can browse them. Only folder names are sent, never file names or file contents.
 - When you pick a folder on the watch, it opens a new Terminal window running Claude Code there. If you ask for a new folder, it creates that empty folder first. It can't reach anything outside the folder you gave it.

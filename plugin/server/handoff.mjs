@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// watch-notes: zero-dependency MCP server + Claude Code channel.
+// handoff: zero-dependency MCP server + Claude Code channel.
 // Receives end-to-end encrypted ideas jotted on Apple Watch (relayed via ntfy)
 // and pushes them into the running Claude Code session. The only thing sent back is an
 // optional one-line suggested next prompt, encrypted with the same key (never Claude's response).
 //
-//   node watch-notes.mjs         # MCP server (Claude Code spawns this)
-//   node watch-notes.mjs pair    # show a code; type it on the watch to pair
+//   node handoff.mjs         # MCP server (Claude Code spawns this)
+//   node handoff.mjs pair    # show a code; type it on the watch to pair
 //
-// This file never launches other programs. The `watch-notes` terminal command (cli/) does that.
+// This file never launches other programs. The `handoff` terminal command (cli/) does that.
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -42,7 +42,7 @@ if (process.argv[2] === 'pair') {
       fs.mkdirSync(DIR, { recursive: true, mode: 0o700 })
       fs.writeFileSync(CONFIG, JSON.stringify({ topicURL: p.topic, key: p.key }, null, 2), { mode: 0o600 })
       await fetch(pairURL, { method: 'POST', body: seal({ ack: p.n }, pk) })
-      console.log('  Paired. Running Claude Code sessions pick this up automatically.\n\n  Next: watch-notes start\n')
+      console.log('  Paired. Running Claude Code sessions pick this up automatically.\n\n  Next: handoff start\n')
       process.exit(0)
     }
   } catch (e) {
@@ -55,13 +55,13 @@ if (process.argv[2] === 'pair') {
 fs.mkdirSync(NOTES, { recursive: true, mode: 0o700 })
 
 const out = msg => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...msg }) + '\n')
-const log = (...a) => process.stderr.write(`[watch-notes] ${a.join(' ')}\n`)
+const log = (...a) => process.stderr.write(`[handoff] ${a.join(' ')}\n`)
 let ready = false
-// Every Claude Code session with the plugin runs this server, but only the one `watch-notes start`
+// Every Claude Code session with the plugin runs this server, but only the one `handoff start`
 // opened is listening on the channel (it sets this). Others must not claim notes they'd ignore;
 // they can still work through them with watch_inbox.
 const CHANNEL = process.env.CLAUDE_WATCH_NOTES_CHANNEL === '1'
-// The chat's name on the watch (`watch-notes start --name`, else the project folder). Notes sent
+// The chat's name on the watch (`handoff start --name`, else the project folder). Notes sent
 // to a chat by name only go to sessions with that name; notes sent to "any chat" go to any of them.
 const NAME = (process.env.CLAUDE_WATCH_NOTES_NAME || path.basename(process.cwd()) || 'Claude').slice(0, 40)
 const forMe = n => !n.to || n.to === NAME
@@ -164,7 +164,7 @@ function handle(msg) {
     return out({ id, result: {
       protocolVersion: params?.protocolVersion || '2025-06-18',
       capabilities: { tools: {}, experimental: { 'claude/channel': {} } },
-      serverInfo: { name: 'watch-notes', version: '1.4.0' },
+      serverInfo: { name: 'handoff', version: '2.0.0' },
       instructions: INSTRUCTIONS,
     } })
   }
@@ -283,7 +283,7 @@ async function subscribe() {
   for (let delay = 1000; ; delay = Math.min(delay * 2, 60000)) {
     const cfg = readConfig()
     if (!cfg) {
-      log('not paired yet: run `watch-notes pair`')
+      log('not paired yet: run `handoff pair`')
       await new Promise(r => setTimeout(r, 5000))
       continue
     }

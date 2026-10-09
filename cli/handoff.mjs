@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// `watch-notes`: terminal command for Watch Notes. Lives outside the plugin so the plugin itself
+// `handoff`: terminal command for Handoff. Lives outside the plugin so the plugin itself
 // never launches programs.
 //
-//   watch-notes pair              pair your watch (shows a code to type on it)
-//   watch-notes start [--name N] [args...]   start Claude Code listening for ideas
-//   watch-notes host [folder]     let the watch open new chats in folder's projects
+//   handoff pair              pair your watch (shows a code to type on it)
+//   handoff start [--name N] [args...]   start Claude Code listening for ideas
+//   handoff host [folder]     let the watch open new chats in folder's projects
 
 import { spawn, execFile, execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
@@ -15,12 +15,12 @@ import { fileURLToPath } from 'node:url'
 
 import { CONFIG, events, open, readConfig, seal } from '../plugin/server/relay.mjs'
 
-const SERVER = fileURLToPath(new URL('../plugin/server/watch-notes.mjs', import.meta.url))
+const SERVER = fileURLToPath(new URL('../plugin/server/handoff.mjs', import.meta.url))
 const CLI = fileURLToPath(import.meta.url)
 
 // Custom channels need the development flag until the plugin is on Anthropic's approved list;
-// then this becomes ['--channels', 'plugin:watch-notes@claude-plugins-official'].
-const CHANNEL_ARGS = ['--dangerously-load-development-channels', 'plugin:watch-notes@watch-notes']
+// then this becomes ['--channels', 'plugin:handoff@claude-plugins-official'].
+const CHANNEL_ARGS = ['--dangerously-load-development-channels', 'plugin:handoff@handoff']
 
 const [cmd, ...rest] = process.argv.slice(2)
 
@@ -40,12 +40,12 @@ if (cmd === 'start') {
   const i = rest.findIndex(a => a === '--name' || a.startsWith('--name='))
   if (i >= 0) {
     const [flag, value] = rest[i].includes('=') ? [1, rest[i].slice(7)] : [2, rest[i + 1]]
-    if (!value) { console.error('Usage: watch-notes start --name <chat name>'); process.exit(1) }
+    if (!value) { console.error('Usage: handoff start --name <chat name>'); process.exit(1) }
     name = value
     rest.splice(i, flag)
   }
   const claudeArgs = ['--permission-mode', 'auto', ...CHANNEL_ARGS, ...rest]
-  console.log(`Starting Claude Code with Watch Notes as the chat "${name}". Ideas from your watch will show up here.\n` +
+  console.log(`Starting Claude Code with Handoff as the chat "${name}". Ideas from your watch will show up here.\n` +
     'Claude Code will warn about development channels: choose "I am using this for local development".\n')
   // caffeinate keeps the Mac awake (so Claude can keep working) for as long as the session runs.
   // Tells this session's plugin server that it's listening, so it (not other open sessions) takes the notes.
@@ -63,15 +63,15 @@ if (cmd === 'start') {
 } else if (cmd === 'host') {
   host(path.resolve(rest[0] || process.cwd()))
 } else {
-  console.log(`Watch Notes: jot ideas on your Apple Watch; Claude Code does them while you're away.
+  console.log(`Handoff: jot ideas on your Apple Watch; Claude Code does them while you're away.
 
-  watch-notes pair              Pair your watch (shows a code to type on it)
-  watch-notes start [args...]   Start Claude Code listening for ideas (extra args go to claude,
-                                e.g. --continue to keep your last conversation)
-      --name <name>             The chat's name on the watch (default: this folder's name)
-  watch-notes host [folder]     Let the watch start new chats: lists the projects in folder
-                                (default: this one) on the watch and opens a Terminal window
-                                running watch-notes start in the one you pick
+  handoff pair              Pair your watch (shows a code to type on it)
+  handoff start [args...]   Start Claude Code listening for ideas (extra args go to claude,
+                            e.g. --continue to keep your last conversation)
+    --name <name>           The chat's name on the watch (default: this folder's name)
+  handoff host [folder]     Let the watch start new chats: lists the projects in folder
+                            (default: this one) on the watch and opens a Terminal window
+                            running handoff start in the one you pick
 `)
 }
 
@@ -97,7 +97,7 @@ function sendToSimulators(code) {
 // "<topic>-n" for sealed requests:
 //   {ls: <path>, id, ts}                      → replies {ls, id, dirs} on "<topic>-l" (folder browsing)
 //   {path, name, create?, ts}                 → opens a Terminal window running
-//                                               `watch-notes start --name <name>` in root/path[/create]
+//                                               `handoff start --name <name>` in root/path[/create]
 // Paths are relative to `root`; anything that resolves outside it (.., symlinks) is refused.
 function host(root) {
   if (!fs.existsSync(root)) { console.error(`No such folder: ${root}`); process.exit(1) }
@@ -129,7 +129,7 @@ function host(root) {
   process.on('SIGINT', quit)
   process.on('SIGTERM', quit)
 
-  console.log(`Watch Notes host: the watch can start new chats in ${projects().length} projects in ${root}.\n` +
+  console.log(`Handoff host: the watch can start new chats in ${projects().length} projects in ${root}.\n` +
     'Keep this running. Press Ctrl+C to stop.\n')
 
   let current
@@ -138,7 +138,7 @@ function host(root) {
     let since = String(Math.floor(Date.now() / 1000)) // only requests made from now on
     for (let delay = 1000; ; delay = Math.min(delay * 2, 60_000)) {
       const cfg = readConfig()
-      if (!cfg) { console.log('Not paired yet: run `watch-notes pair`.'); await new Promise(r => setTimeout(r, 5000)); continue }
+      if (!cfg) { console.log('Not paired yet: run `handoff pair`.'); await new Promise(r => setTimeout(r, 5000)); continue }
       announce()
       current = new AbortController()
       try {
@@ -188,7 +188,7 @@ function host(root) {
       `exec ${q(process.execPath)} ${q(CLI)} start --name ${q(name)}`,
     ].join('\n') + '\n'
     if (process.env.CLAUDE_WATCH_NOTES_HOST_DRYRUN) return console.log(`LAUNCH ${JSON.stringify({ dir, name, script })}`)
-    const file = path.join(os.tmpdir(), `watch-notes-${crypto.randomUUID()}.command`)
+    const file = path.join(os.tmpdir(), `handoff-${crypto.randomUUID()}.command`)
     fs.writeFileSync(file, script, { mode: 0o700 })
     execFile('open', ['-a', 'Terminal', file], e => { if (e) console.error(`Couldn't open Terminal: ${e.message}`) })
   }

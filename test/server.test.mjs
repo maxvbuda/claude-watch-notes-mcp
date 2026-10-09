@@ -1,4 +1,4 @@
-// End-to-end tests for plugin/server/watch-notes.mjs against a mock ntfy relay.
+// End-to-end tests for plugin/server/handoff.mjs against a mock ntfy relay.
 // Run: node --test test/
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -9,7 +9,7 @@ import path from 'node:path'
 import { after, before, describe, test } from 'node:test'
 import { startMock } from './mock-ntfy.mjs'
 
-const SERVER = new URL('../plugin/server/watch-notes.mjs', import.meta.url).pathname
+const SERVER = new URL('../plugin/server/handoff.mjs', import.meta.url).pathname
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 // ---- the watch side, mirroring App.swift (CryptoKit AES.GCM combined, base64) ----
@@ -269,7 +269,7 @@ describe('sessions, restarts and the network', () => {
     await sleep(800)
     assert.equal(other.pushes().length, 0)
     const r = await other.request('tools/call', { name: 'watch_inbox', arguments: {} })
-    assert.match(r.result.content[0].text, new RegExp(n.id)) // still reachable from /watch-notes:inbox
+    assert.match(r.result.content[0].text, new RegExp(n.id)) // still reachable from /handoff:inbox
     const listening = startServer(dir)
     await listening.waitFor(pushFor(n.id))
     await Promise.all([other.stop(), listening.stop()])
@@ -477,7 +477,7 @@ describe('sessions, restarts and the network', () => {
 })
 
 describe('host command (new chats from the watch)', () => {
-  const CLI = new URL('../cli/watch-notes.mjs', import.meta.url).pathname
+  const CLI = new URL('../cli/handoff.mjs', import.meta.url).pathname
   test('lists projects, opens only listed ones, ignores stale/forged requests, quotes names safely', async () => {
     const dir = tmpDir(); const cfg = pairDir(dir)
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cwn-root-')))
@@ -541,7 +541,7 @@ describe('host command (new chats from the watch)', () => {
     assert.deepEqual((await lsReply('website/src')).dirs, ['deep', 'made-on-watch'])
     assert.equal((await lsReply('../')).dirs, null)
     assert.equal((await lsReply('escape-link')).dirs, null)
-    // The name reaches `watch-notes start` as one literal argument: no command runs.
+    // The name reaches `handoff start` as one literal argument: no command runs.
     const nameArg = launches[0].script.match(/--name (.*)$/m)[1]
     const { execFileSync } = await import('node:child_process')
     assert.equal(execFileSync('/bin/sh', ['-c', `printf %s ${nameArg}`], { cwd: root }).toString(), evil)

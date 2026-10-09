@@ -1,4 +1,4 @@
-// Shared by the MCP server and the `watch-notes` command: relay address, local config,
+// Shared by the MCP server and the `handoff` command: relay address, local config,
 // the sealing format, and ntfy's streaming JSON subscription.
 import crypto from 'node:crypto'
 import fs from 'node:fs'

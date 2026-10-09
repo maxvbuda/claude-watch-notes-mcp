@@ -1,10 +1,10 @@
 {
-  "name": "watch-notes",
+  "name": "handoff",
   "version": "1.0.0",
   "description": "Jot ideas on your Apple Watch; Claude Code works on them while you're away.",
   "type": "module",
   "bin": {
-    "watch-notes": "cli/watch-notes.mjs"
+    "handoff": "cli/handoff.mjs"
   },
   "files": [
     "cli/",

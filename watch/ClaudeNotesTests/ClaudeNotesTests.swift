@@ -111,7 +111,7 @@ final class ClaudeNotesTests: XCTestCase {
     func testNewChatIsRequestedFromTheHostAndSelected() async throws {
         let store = freshStore()
         store.setPairing(try XCTUnwrap(Self.pairing))
-        // The e2e harness runs `watch-notes host` (dry run) on a folder holding "e2e-project".
+        // The e2e harness runs `handoff host` (dry run) on a folder holding "e2e-project".
         try await wait("host's projects listed") {
             Task { await store.checkChats() }
             return store.projects.contains("e2e-project")

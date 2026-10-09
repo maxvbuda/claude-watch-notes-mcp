@@ -1,9 +1,9 @@
-# Watch Notes for Claude Code
+# Handoff for Claude Code
 
 Jot ideas on your Apple Watch. Claude Code works on them while you're away. **The watch never shows Claude's response**, so there's nothing to get pulled into. It's a scratchpad that hands off and goes quiet. The only thing that comes back is Claude's one-line suggestion for what to do next, which you can send with **Accept suggestion**.
 
 ```
-Watch (dictate/scribble) ──AES-GCM──▶ ntfy topic ──▶ watch-notes plugin ──channel──▶ Claude Code session
+Watch (dictate/scribble) ──AES-GCM──▶ ntfy topic ──▶ handoff plugin ──channel──▶ Claude Code session
 ```
 
 - **Watch app**: one SwiftUI file, watch-only (no iPhone app), no assets or dependencies. It builds for watchOS 26 / Apple Watch SE 3 with `-Osize`, whole-module optimization, and dead-code stripping. Notes queue offline and retry when the app comes back to the foreground.
@@ -16,14 +16,14 @@ Watch (dictate/scribble) ──AES-GCM──▶ ntfy topic ──▶ watch-notes
 
 ```
 /plugin marketplace add maxvbuda/claude-watch-notes-mcp
-/plugin install watch-notes@watch-notes
+/plugin install handoff@handoff
 ```
 
-**2. Get the `watch-notes` command** (in your terminal): `npm install -g github:maxvbuda/claude-watch-notes-mcp`, or `npm link` from a clone.
+**2. Get the `handoff` command** (in your terminal): `npm install -g github:maxvbuda/claude-watch-notes-mcp`, or `npm link` from a clone.
 
 **3. Install the watch app**: from the App Store, or build it yourself: `cd watch && xcodegen generate && open ClaudeNotes.xcodeproj`, pick your team, then Run.
 
-**4. Pair (once):** run `watch-notes pair`, or `/watch-notes:pair` inside Claude Code. It shows a code like `K7QX-M2PA`; type it into the app on the watch. The watch generates its own topic and key, sends them sealed with a key derived from the code, and waits for the Mac's acknowledgement. Nothing secret is built into the app, so one build works for anyone. Running Claude Code sessions pick up a new pairing automatically. To pair again, tap **Settings** at the bottom of the list, then **Unpair**.
+**4. Pair (once):** run `handoff pair`, or `/handoff:pair` inside Claude Code. It shows a code like `K7QX-M2PA`; type it into the app on the watch. The watch generates its own topic and key, sends them sealed with a key derived from the code, and waits for the Mac's acknowledgement. Nothing secret is built into the app, so one build works for anyone. Running Claude Code sessions pick up a new pairing automatically. To pair again, tap **Settings** at the bottom of the list, then **Unpair**.
 
 ## Use
 
@@ -32,19 +32,19 @@ Before you leave, start a session in the project you want Claude to work on. The
 **Instant (channel mode):**
 
 ```sh
-watch-notes start             # add --continue to pick up your last conversation
+handoff start             # add --continue to pick up your last conversation
 ```
 
-Ideas arrive in the session within seconds. Only sessions opened with `watch-notes start` take notes, so other Claude Code windows you have open won't grab them.
+Ideas arrive in the session within seconds. Only sessions opened with `handoff start` take notes, so other Claude Code windows you have open won't grab them.
 
-**Several chats:** run `watch-notes start` in as many projects as you like. Each one shows up on the watch by its folder name, or by a name you choose with `watch-notes start --name "Website"`. Pick one in the **To** row at the top of the app, and your notes go only to that chat. **Any chat** lets whichever one is open take it. A note for a chat that's closed waits until it opens again.
+**Several chats:** run `handoff start` in as many projects as you like. Each one shows up on the watch by its folder name, or by a name you choose with `handoff start --name "Website"`. Pick one in the **To** row at the top of the app, and your notes go only to that chat. **Any chat** lets whichever one is open take it. A note for a chat that's closed waits until it opens again.
 
-**New chats from the watch:** run `watch-notes host ~/GitHub` (or any folder of projects) and leave it running. The watch then shows **New chat**, a browser for the folders inside it. Tap into any folder, then choose **Start chat here**, or type a name under **New folder…** to make a folder there and start in it. Then name the chat (it starts as the folder's name) and tap **Start chat**. Your Mac opens a new Terminal window running `watch-notes start` in that folder, and the new chat is selected on the watch, so the next note goes straight to it. Only folders inside the one you gave can be opened (no `..` or symlinks out), and `node_modules` and hidden folders aren't listed. `watch-notes start` runs `claude --permission-mode auto` with this plugin's channel turned on, and keeps your Mac awake while the session runs. Until Watch Notes is on Anthropic's approved channel list, Claude Code shows a warning about development channels first: choose **I am using this for local development**.
+**New chats from the watch:** run `handoff host ~/GitHub` (or any folder of projects) and leave it running. The watch then shows **New chat**, a browser for the folders inside it. Tap into any folder, then choose **Start chat here**, or type a name under **New folder…** to make a folder there and start in it. Then name the chat (it starts as the folder's name) and tap **Start chat**. Your Mac opens a new Terminal window running `handoff start` in that folder, and the new chat is selected on the watch, so the next note goes straight to it. Only folders inside the one you gave can be opened (no `..` or symlinks out), and `node_modules` and hidden folders aren't listed. `handoff start` runs `claude --permission-mode auto` with this plugin's channel turned on, and keeps your Mac awake while the session runs. Until Handoff is on Anthropic's approved channel list, Claude Code shows a warning about development channels first: choose **I am using this for local development**.
 
 **Every few minutes (no warning):** in a normal `claude --permission-mode auto` session, run
 
 ```
-/loop 5m /watch-notes:inbox
+/loop 5m /handoff:inbox
 ```
 
 `--permission-mode auto` lets Claude work without you there to approve each step: a safety classifier reviews every action instead. If it blocks 3 actions in a row, Claude Code goes back to asking in the terminal, so the server tells Claude to skip blocked steps and list them in its summary instead of retrying.
@@ -57,7 +57,7 @@ When you get home, the work is done. Claude calls `watch_note_done` with a summa
 
 ## Notes
 
-- ntfy.sh keeps messages for about 12 hours. The server saves them to disk as soon as they arrive, so this only matters if no Claude session is running for that whole time. To self-host ntfy, change `RELAY` in `plugin/server/watch-notes.mjs` and `Relay.base` in `App.swift`.
+- ntfy.sh keeps messages for about 12 hours. The server saves them to disk as soon as they arrive, so this only matters if no Claude session is running for that whole time. To self-host ntfy, change `RELAY` in `plugin/server/handoff.mjs` and `Relay.base` in `App.swift`.
 - ntfy turns messages of 4 KB or more into file attachments, which ntfy.sh keeps for only about 3 hours. The server handles those, but a very long note (roughly 2,900+ characters) needs a session running within that window.
 
 ## Tests
@@ -71,5 +71,5 @@ node test/watch-e2e.mjs --real-relay # same UI flow through the public ntfy.sh
 
 The watch end-to-end run unpairs the simulator. Afterwards, run `pair` again.
 
-See [PRIVACY.md](PRIVACY.md) for exactly what data goes where, and [docs/official-listing.md](docs/official-listing.md) for the plan to get Watch Notes on Anthropic's approved channel list.
+See [PRIVACY.md](PRIVACY.md) for exactly what data goes where, and [docs/official-listing.md](docs/official-listing.md) for the plan to get Handoff on Anthropic's approved channel list.
 
