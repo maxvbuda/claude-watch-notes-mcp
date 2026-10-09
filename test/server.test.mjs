@@ -541,14 +541,76 @@ describe('host command (new chats from the watch)', () => {
     assert.deepEqual((await lsReply('website/src')).dirs, ['deep', 'made-on-watch'])
     assert.equal((await lsReply('../')).dirs, null)
     assert.equal((await lsReply('escape-link')).dirs, null)
-    // The name reaches `handoff start` as one literal argument: no command runs.
-    const nameArg = launches[0].script.match(/--name (.*)$/m)[1]
+    // The log window's script quotes the name and log path: running it with the name runs no command.
     const { execFileSync } = await import('node:child_process')
-    assert.equal(execFileSync('/bin/sh', ['-c', `printf %s ${nameArg}`], { cwd: root }).toString(), evil)
+    const title = launches[0].script.match(/^printf '\\033\]0;%s\\007' (.*)$/m)[1]
+    assert.equal(execFileSync('/bin/sh', ['-c', `printf %s ${title}`], { cwd: root }).toString(), `Handoff: ${evil}`)
+    assert.match(launches[0].script, /tail -n \+1 -F '[^'$`"]+\.log'\n$/)
     assert.ok(!fs.existsSync(path.join(root, 'pwned')))
+    assert.deepEqual((await announced()).at(-1).chats.sort(), [evil, 'deep', 'made-on-watch'].sort())
 
     h.kill('SIGTERM'); await new Promise(r => h.on('exit', r))
     assert.equal((await announced()).at(-1).gone, true)
+  })
+
+  test('runs notes for its chats headless, one at a time, continuing the same session', async () => {
+    const dir = tmpDir(); const cfg = pairDir(dir)
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cwn-root-')))
+    fs.mkdirSync(path.join(root, 'website'))
+    const calls = path.join(dir, 'fake-claude.jsonl')
+    const env = { ...process.env, CLAUDE_WATCH_NOTES_DIR: dir, CLAUDE_WATCH_NOTES_RELAY: mock.url, CLAUDE_WATCH_NOTES_HOST_DRYRUN: '1',
+      CLAUDE_WATCH_NOTES_CLAUDE: new URL('./fake-claude.mjs', import.meta.url).pathname, FAKE_CLAUDE_LOG: calls,
+      CLAUDE_WATCH_NOTES_SWEEP_MS: '200', CLAUDE_WATCH_NOTES_CHANNEL: '1' }
+    let h = spawn(process.execPath, [CLI, 'host', root], { env })
+    spawned.add(h)
+    let out = ''
+    h.stdout.on('data', d => { out += d })
+    await connected(`${cfg.topic}-n`); await connected(cfg.topic)
+    await post(`${cfg.topicURL}-n`, seal({ ts: new Date().toISOString(), path: 'website', name: 'web' }, cfg.key))
+    let end = Date.now() + 5000
+    while (!out.includes('LAUNCH') && Date.now() < end) await sleep(50)
+    const { session } = JSON.parse(out.match(/^LAUNCH (.*)$/m)[1])
+
+    const ran = () => { try { return fs.readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) } catch { return [] } }
+    const saved = id => { try { return JSON.parse(fs.readFileSync(path.join(dir, 'notes', `${id}.json`), 'utf8')) } catch { return {} } }
+    const until = async (cond, what) => { const stop = Date.now() + 8000; while (!cond()) { if (Date.now() > stop) throw new Error(`timed out: ${what}\n${out}`); await sleep(50) } }
+
+    const first = note('-rf make a todo app', { to: 'web' }), second = note('add dark mode', { to: 'web' })
+    const other = note('not for the host', { to: 'some other chat' })
+    for (const n of [first, second, other]) await post(cfg.topicURL, seal(n, cfg.key))
+    await until(() => ran().length >= 2 && saved(second.id).status === 'done', 'both notes run')
+    const [a, b] = ran()
+    assert.equal(a.cwd, path.join(root, 'website'))
+    assert.equal(a.name, 'web')
+    assert.ok(a.args.includes('-p') && a.args.includes('--permission-mode') && a.args.includes('auto'))
+    assert.deepEqual(a.args.slice(a.args.indexOf('--session-id'), a.args.indexOf('--session-id') + 2), ['--session-id', session])
+    assert.deepEqual(b.args.slice(b.args.indexOf('--resume'), b.args.indexOf('--resume') + 2), ['--resume', session]) // same conversation
+    assert.ok(a.prompt.startsWith('-rf make a todo app') && a.prompt.includes(`note_id=${first.id}`)) // prompt on stdin, not argv
+    assert.ok(!a.args.some(x => x.includes('todo')))
+    assert.equal(saved(first.id).summary, 'Did: -rf make a todo app') // Claude didn't call watch_note_done
+    assert.equal(ran().length, 2) // the note for another chat isn't run here
+    assert.equal(saved(other.id).status, 'new')
+    const log = fs.readFileSync(path.join(dir, 'logs', fs.readdirSync(path.join(dir, 'logs'))[0]), 'utf8')
+    assert.match(log, /Note from your watch:\n-rf make a todo app/)
+    assert.match(log, /→ Bash \{"command":"ls"\}/)
+    assert.match(log, new RegExp(`claude --resume ${session}`))
+
+    // Failures are recorded, and the chat survives a host restart (it keeps resuming the session).
+    const bad = note('FAIL please', { to: 'web' })
+    await post(cfg.topicURL, seal(bad, cfg.key))
+    await until(() => saved(bad.id).status === 'failed', 'failure recorded')
+    assert.match(saved(bad.id).summary, /something broke/)
+    h.kill('SIGTERM'); await new Promise(r => h.on('exit', r))
+    h = spawn(process.execPath, [CLI, 'host', root], { env })
+    spawned.add(h)
+    await connected(cfg.topic)
+    const later = note('one more thing', { to: 'web' })
+    await post(cfg.topicURL, seal(later, cfg.key))
+    await until(() => saved(later.id).status === 'done', 'note after restart')
+    const last = ran().at(-1)
+    assert.equal(last.args[last.args.indexOf('--resume') + 1], session)
+    assert.equal(ran().filter(r => r.prompt.includes(first.id)).length, 1) // nothing re-run after the restart
+    h.kill('SIGTERM'); await new Promise(r => h.on('exit', r))
   })
 })
 

@@ -12,9 +12,8 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { CONFIG, DIR, RELAY, events, open, readConfig, seal } from './relay.mjs'
+import { CONFIG, DIR, NOTES, RELAY, alive, currentClaim, events, noteFile, open, readConfig, saveNote, seal, tryClaim, writeAtomic } from './relay.mjs'
 
-const NOTES = path.join(DIR, 'notes')
 const CURSOR = path.join(DIR, 'cursor')
 
 // ---------- pair ----------
@@ -94,7 +93,6 @@ const TOOLS = [
   },
 ]
 
-const noteFile = id => path.join(NOTES, `${id.replace(/[^\w-]/g, '')}.json`)
 const allNotes = () => fs.readdirSync(NOTES).filter(f => f.endsWith('.json'))
   .map(f => { try { return JSON.parse(fs.readFileSync(path.join(NOTES, f), 'utf8')) } catch { return null } })
   .filter(Boolean).sort((a, b) => String(a.at).localeCompare(String(b.at)))
@@ -164,7 +162,7 @@ function handle(msg) {
     return out({ id, result: {
       protocolVersion: params?.protocolVersion || '2025-06-18',
       capabilities: { tools: {}, experimental: { 'claude/channel': {} } },
-      serverInfo: { name: 'handoff', version: '2.0.0' },
+      serverInfo: { name: 'handoff', version: '2.1.0' },
       instructions: INSTRUCTIONS,
     } })
   }
@@ -202,30 +200,6 @@ process.on('SIGTERM', quit)
 process.on('SIGINT', quit)
 
 // ---------- notes ----------
-// Several Claude Code sessions may run this server at once. Each note file is created
-// exactly once (O_EXCL), and a separate <id>.claim marker, also O_EXCL and never moved,
-// decides which session gets it. Updates are write-then-rename so readers never see half a file.
-const writeAtomic = (f, data) => {
-  const tmp = `${f}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, data)
-  fs.renameSync(tmp, f)
-}
-
-// Claim markers are generations: <id>.claim, then <id>.claim.1, .2… when a note is rescued.
-// Each is created with O_EXCL, so exactly one session wins each generation.
-const claimFile = (id, gen) => noteFile(id).replace(/\.json$/, gen ? `.claim.${gen}` : '.claim')
-
-function currentClaim(id) {
-  let gen = 0
-  while (fs.existsSync(claimFile(id, gen + 1))) gen++
-  try {
-    const f = claimFile(id, gen)
-    const [pid, kind] = fs.readFileSync(f, 'utf8').trim().split(' ')
-    return { gen, pid: Number(pid), channel: kind === 'channel', age: Date.now() - fs.statSync(f).mtimeMs }
-  } catch { return null }
-}
-
-const alive = pid => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
 const LEGACY_GRACE_MS = 2 * 60_000
 
 // Safety net, run by listening sessions at startup and every 30s. Pushes notes nobody has taken,
@@ -248,31 +222,18 @@ function sweep() {
 setInterval(sweep, Number(process.env.CLAUDE_WATCH_NOTES_SWEEP_MS) || 30_000)
 
 function claimAndPush(n, gen = 0) {
-  if (!forMe(n)) return
-  try { fs.writeFileSync(claimFile(n.id, gen), `${process.pid} channel`, { flag: 'wx' }) } catch { return }
+  if (!forMe(n) || !tryClaim(n.id, gen)) return
   n = { ...n, status: 'sent' }
   writeAtomic(noteFile(n.id), JSON.stringify(n, null, 2))
   push(n)
 }
 
 async function receive(ev, key) {
-  if (ev.event !== 'message') return
-  let body = ev.message
-  // ntfy turns bodies of 4 KB or more into attachments (kept ~3h on ntfy.sh).
-  if (ev.attachment?.url && ev.attachment.size <= 64 * 1024) {
-    try { body = await (await fetch(ev.attachment.url, { signal: AbortSignal.timeout(30_000) })).text() } catch { return }
-  }
-  let p
-  try { p = open(body, key) } catch { return } // not from our watch: drop silently
-  const id = String(p.id || ev.id).replace(/[^\w-]/g, '').slice(0, 64)
-  if (!id) return
-  const at = typeof p.ts === 'string' && !isNaN(Date.parse(p.ts)) ? p.ts : new Date(ev.time * 1000).toISOString()
-  const note = { id, text: String(p.t ?? '').slice(0, 20000), at, status: 'new' }
-  if (typeof p.to === 'string' && p.to) note.to = p.to.slice(0, 40)
-  // Created once: a retried or concurrently received copy of the same note fails here.
+  const got = await saveNote(ev, key)
+  if (!got) return
+  if (got.created) log('note', got.note.id)
   // If another session saved it first, it may be one that isn't listening: still try to claim it.
-  try { fs.writeFileSync(noteFile(id), JSON.stringify(note, null, 2), { flag: 'wx' }); log('note', id) } catch {}
-  if (ready && CHANNEL) claimAndPush(note)
+  if (ready && CHANNEL) claimAndPush(got.note)
 }
 
 // ---------- ntfy subscription (auto-reconnect, reloads when re-paired) ----------

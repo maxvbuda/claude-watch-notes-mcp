@@ -62,6 +62,7 @@ private struct BackMessage: Decodable {
     var host: String?
     var root: String?
     var projects: [String]?
+    var chats: [String]? // chats the host runs headless
     var gone: Bool?
     var id: String? // folder listing replies on "<topic>-l"
     var dirs: [String]?
@@ -158,14 +159,17 @@ final class Store {
               self.pairing?.topicURL == pairing.topicURL else { return }
         var open = Set<String>()
         var hostProjects: [String] = []
+        var hostChats: [String] = []
         for msg in Self.messages(in: data, key: SymmetricKey(data: pairing.key)) {
             if msg.body.host != nil {
                 hostProjects = msg.body.gone == true ? [] : msg.body.projects ?? []
+                hostChats = msg.body.gone == true ? [] : msg.body.chats ?? []
                 if let root = msg.body.root { hostRoot = root }
             }
             guard let name = msg.body.chat, !name.isEmpty else { continue }
             if msg.body.gone == true { open.remove(name) } else { open.insert(name) }
         }
+        open.formUnion(hostChats)
         let sorted = open.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         if sorted != chats { chats = sorted }
         if hostProjects != projects { projects = hostProjects }

@@ -57,3 +57,58 @@ async function* lines(body, kick) {
     }
   }
 }
+
+// ---------- notes on disk ----------
+// Several processes (each Claude Code session's server, and `handoff host`) share this folder.
+// Each note file is created exactly once (O_EXCL), and claim markers, also O_EXCL and never moved,
+// decide which process handles it. Updates are write-then-rename so readers never see half a file.
+export const NOTES = path.join(DIR, 'notes')
+export const noteFile = id => path.join(NOTES, `${id.replace(/[^\w-]/g, '')}.json`)
+
+export const writeAtomic = (f, data) => {
+  const tmp = `${f}.${process.pid}.tmp`
+  fs.writeFileSync(tmp, data)
+  fs.renameSync(tmp, f)
+}
+
+// Claim markers are generations: <id>.claim, then <id>.claim.1, .2… when a note is rescued.
+// Each is created with O_EXCL, so exactly one process wins each generation.
+const claimFile = (id, gen) => noteFile(id).replace(/\.json$/, gen ? `.claim.${gen}` : '.claim')
+
+export function tryClaim(id, gen = 0) {
+  try { fs.writeFileSync(claimFile(id, gen), `${process.pid} channel`, { flag: 'wx' }); return true } catch { return false }
+}
+
+export function currentClaim(id) {
+  let gen = 0
+  while (fs.existsSync(claimFile(id, gen + 1))) gen++
+  try {
+    const f = claimFile(id, gen)
+    const [pid, kind] = fs.readFileSync(f, 'utf8').trim().split(' ')
+    return { gen, pid: Number(pid), channel: kind === 'channel', age: Date.now() - fs.statSync(f).mtimeMs }
+  } catch { return null }
+}
+
+export const alive = pid => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }
+
+// Decrypts a note event from the watch and saves it (once). Returns {note, created}, or null if
+// it isn't a note from our watch.
+export async function saveNote(ev, key) {
+  if (ev.event !== 'message') return null
+  let body = ev.message
+  // ntfy turns bodies of 4 KB or more into attachments (kept ~3h on ntfy.sh).
+  if (ev.attachment?.url && ev.attachment.size <= 64 * 1024) {
+    try { body = await (await fetch(ev.attachment.url, { signal: AbortSignal.timeout(30_000) })).text() } catch { return null }
+  }
+  let p
+  try { p = open(body, key) } catch { return null } // not from our watch: drop silently
+  const id = String(p.id || ev.id).replace(/[^\w-]/g, '').slice(0, 64)
+  if (!id) return null
+  const at = typeof p.ts === 'string' && !isNaN(Date.parse(p.ts)) ? p.ts : new Date(ev.time * 1000).toISOString()
+  const note = { id, text: String(p.t ?? '').slice(0, 20000), at, status: 'new' }
+  if (typeof p.to === 'string' && p.to) note.to = p.to.slice(0, 40)
+  fs.mkdirSync(NOTES, { recursive: true, mode: 0o700 })
+  // Created once: a retried or concurrently received copy of the same note fails here.
+  try { fs.writeFileSync(noteFile(id), JSON.stringify(note, null, 2), { flag: 'wx' }); return { note, created: true } } catch {}
+  try { return { note: JSON.parse(fs.readFileSync(noteFile(id), 'utf8')), created: false } } catch { return { note, created: false } }
+}
