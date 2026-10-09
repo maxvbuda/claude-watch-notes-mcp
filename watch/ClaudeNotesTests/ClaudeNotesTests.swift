@@ -127,9 +127,11 @@ final class ClaudeNotesTests: XCTestCase {
         XCTAssertEqual(listed, ["sub"])
         let outside = await store.listFolders("../")
         XCTAssertEqual(outside, [])
-        let made = await store.startChat(in: "e2e-project/sub", newFolder: "from-watch")
+        XCTAssertEqual(store.defaultChatName(in: "e2e-project/sub", newFolder: "from-watch"), "from-watch")
+        XCTAssertEqual(store.defaultChatName(in: "e2e-project/sub"), "sub")
+        let made = await store.startChat(in: "e2e-project/sub", newFolder: "from-watch", name: "  My watch chat  ")
         XCTAssertTrue(made)
-        XCTAssertEqual(store.target, "from-watch")
+        XCTAssertEqual(store.target, "My watch chat") // the name typed on the watch, trimmed
     }
 
     // MARK: suggestions

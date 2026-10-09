@@ -1,6 +1,6 @@
 # Privacy Policy: Watch Notes
 
-_Last updated: October 7, 2026_
+_Last updated: October 8, 2026_
 
 Watch Notes has two parts: an Apple Watch app and a Claude Code plugin that runs on your own Mac. The developer runs no servers and collects no data.
 
@@ -16,11 +16,32 @@ Watch Notes has two parts: an Apple Watch app and a Claude Code plugin that runs
 - It downloads your encrypted notes from the relay, decrypts them, and saves them in `~/.claude-watch-notes/` on your Mac.
 - It passes each note to your Claude Code session. Claude Code then processes it under your Anthropic account, like anything you type into Claude Code. See [Anthropic's privacy policy](https://www.anthropic.com/legal/privacy).
 - When Claude finishes a note, it records a short summary with the plugin's `watch_note_done` tool. The summary is saved in the same place, on your Mac only, and is never sent to the relay or anywhere else.
-- Claude can also include a one-line suggested next prompt. That's the only thing sent back to the watch. It's encrypted with the same key and sent through the relay to the watch, which shows it with an **Accept suggestion** button. Claude's response itself is never sent.
+- Claude can also include a one-line suggested next prompt. It's encrypted with the same key and sent through the relay to the watch, which shows it with an **Accept suggestion** button. Claude's response itself is never sent to the watch.
+- Each Claude Code session started with `watch-notes start` sends the watch its chat name (your folder's name, or one you choose) about once a minute, encrypted, so the watch can list open chats. Notes you address to a chat carry that name too.
+
+## What `watch-notes host` does (optional)
+
+If you run `watch-notes host` on your Mac, the watch can start new chats:
+
+- It sends the watch the names of the folders inside the folder you gave it, encrypted, so you can browse them. Only folder names are sent, never file names or file contents.
+- When you pick a folder on the watch, it opens a new Terminal window running Claude Code there. If you ask for a new folder, it creates that empty folder first. It can't reach anything outside the folder you gave it.
+
+## Everything that travels through the relay
+
+All of it is encrypted with your key, so ntfy.sh can't read any of it:
+
+| Topic | From → to | Contents |
+| --- | --- | --- |
+| `cw-…` | watch → Mac | your notes, and the chat each is for |
+| `cw-…-s` | Mac → watch | Claude's suggested next prompt |
+| `cw-…-c` | Mac → watch | open chat names; the host's top-level folder names |
+| `cw-…-n` | watch → Mac | requests to the host: list a folder, start a chat, make a folder |
+| `cw-…-l` | Mac → watch | subfolder names, in reply to a list request |
 
 ## How long data is kept
 
 - **On your Mac:** notes and Claude's summaries stay in `~/.claude-watch-notes/` until you delete them.
+- **On the watch:** up to 12 notes of history (until you delete them in Settings), your draft, the last suggestion, and your chosen chat.
 - **On the relay (ntfy.sh):** encrypted messages for up to about 12 hours, and file attachments (notes of 4 KB or more) for about 3 hours.
 - **By the developer:** nothing, because no data ever reaches the developer.
 

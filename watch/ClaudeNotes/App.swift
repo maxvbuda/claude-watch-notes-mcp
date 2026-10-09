@@ -198,11 +198,17 @@ final class Store {
         return nil
     }
 
+    /// The name a new chat in `path` (or in a new folder there) gets unless you change it.
+    func defaultChatName(in path: String, newFolder: String? = nil) -> String {
+        newFolder ?? path.split(separator: "/").last.map(String.init) ?? hostRoot ?? "Chat"
+    }
+
     /// Asks `watch-notes host` to open a new chat in `path` (relative to its folder), optionally in a
     /// new folder made there first, and points new notes at it. Notes sent before it's up wait for it.
-    /// Returns false if the request couldn't be sent.
-    func startChat(in path: String, newFolder: String? = nil) async -> Bool {
-        let base = newFolder ?? path.split(separator: "/").last.map(String.init) ?? hostRoot ?? "Chat"
+    /// `name` is the chat's name (default: the folder's). Returns false if the request couldn't be sent.
+    func startChat(in path: String, newFolder: String? = nil, name custom: String? = nil) async -> Bool {
+        let typed = String((custom ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+        let base = typed.isEmpty ? defaultChatName(in: path, newFolder: newFolder) : typed
         var name = base, n = 1
         while chats.contains(name) || starting.contains(name) { n += 1; name = "\(base) \(n)" }
         var fields = ["path": path, "name": name]
@@ -593,19 +599,19 @@ struct FolderView: View {
     @Environment(Store.self) private var store
     @State private var dirs: [String]?
     @State private var unreachable = false
-    @State private var busy = false
-    @State private var failed = false
     @State private var newFolder = ""
+    @State private var namingNewFolder: String?
 
     var body: some View {
         List {
-            Button { start() } label: { Label("Start chat here", systemImage: "plus.bubble") }
-                .disabled(busy)
+            NavigationLink {
+                NameChatView(path: path, newFolder: nil, close: close)
+            } label: { Label("Start chat here", systemImage: "plus.bubble") }
             TextField("New folder…", text: $newFolder)
-                .onSubmit { start(newFolder: newFolder) }
-                .disabled(busy)
-            if busy { HStack { ProgressView().frame(width: 24); Text("Starting…") } }
-            if failed { Text("Couldn't reach your Mac. Try again.").font(.footnote).foregroundStyle(.red) }
+                .onSubmit {
+                    let folder = newFolder.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !folder.isEmpty, !folder.contains("/"), !folder.hasPrefix(".") { namingNewFolder = folder }
+                }
 
             Section("Folders") {
                 if let dirs {
@@ -623,19 +629,50 @@ struct FolderView: View {
             }
         }
         .navigationTitle(title)
+        .navigationDestination(item: $namingNewFolder) { folder in
+            NameChatView(path: path, newFolder: folder, close: close)
+        }
         .task {
             if path.isEmpty { dirs = store.projects } // already known: show it at once, then refresh
             if let fresh = await store.listFolders(path) { dirs = fresh } else if dirs == nil { unreachable = true }
         }
     }
+}
 
-    private func start(newFolder: String? = nil) {
-        let folder = newFolder?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let folder, folder.isEmpty || folder.contains("/") || folder.hasPrefix(".") { return }
+/// Last step of New chat: name it (prefilled with the folder's name), then start it.
+struct NameChatView: View {
+    let path: String
+    let newFolder: String?
+    let close: () -> Void
+    @Environment(Store.self) private var store
+    @State private var name = ""
+    @State private var busy = false
+    @State private var failed = false
+
+    var body: some View {
+        List {
+            TextField("Chat name", text: $name)
+                .disabled(busy)
+            Button(action: start) {
+                if busy { HStack { ProgressView().frame(width: 24); Text("Starting…") } }
+                else { Label("Start chat", systemImage: "plus.bubble") }
+            }
+            .disabled(busy)
+            if failed { Text("Couldn't reach your Mac. Try again.").font(.footnote).foregroundStyle(.red) }
+            if let newFolder {
+                Text("Makes the folder \(newFolder) first.").font(.footnote).foregroundStyle(.secondary)
+                    .listRowBackground(Color.clear)
+            }
+        }
+        .navigationTitle("Name chat")
+        .onAppear { if name.isEmpty { name = store.defaultChatName(in: path, newFolder: newFolder) } }
+    }
+
+    private func start() {
         busy = true
         failed = false
         Task {
-            if await store.startChat(in: path, newFolder: folder) { close() } else { failed = true }
+            if await store.startChat(in: path, newFolder: newFolder, name: name) { close() } else { failed = true }
             busy = false
         }
     }

@@ -99,7 +99,7 @@ try {
   const launches = [...hostOut.matchAll(/^LAUNCH (.*)$/gm)].map(m => JSON.parse(m[1]))
   assert.deepEqual(launches.map(l => [l.dir, l.name]), [
     [path.join(root, 'e2e-project'), 'e2e-project'],
-    [path.join(root, 'e2e-project/sub/from-watch'), 'from-watch'],
+    [path.join(root, 'e2e-project/sub/from-watch'), 'My watch chat'],
   ], 'host did not start the requested chats')
   assert.ok(fs.statSync(path.join(root, 'e2e-project/sub/from-watch')).isDirectory())
   assert.equal(pushes.filter(p => p === 'e2e to elsewhere').length, 0, 'a note for another chat was delivered here')
